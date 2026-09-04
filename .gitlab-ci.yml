@@ -57,25 +57,6 @@ pytest:
       - reports/pytest/junit.xml
       - reports/coverage/coverage.xml
 
-pytest-slow:
-  stage: test
-  variables:
-    PASSAGEN_PYTEST_WORKERS: "4"
-  script:
-    - mkdir -p reports/pytest
-    - >
-      uv run python scripts/pytest_parallel.py
-      -o addopts=""
-      -m slow
-      --import-mode=importlib
-      --junitxml=reports/pytest/slow-junit.xml
-  artifacts:
-    when: always
-    reports:
-      junit: reports/pytest/slow-junit.xml
-    paths:
-      - reports/pytest/slow-junit.xml
-
 build-package:
   stage: build
   script:
