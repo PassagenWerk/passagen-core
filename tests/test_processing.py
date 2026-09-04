@@ -137,7 +137,7 @@ def test_start_update_validates_papers_and_mode(tmp_path: Path) -> None:
     with pytest.raises(ProcessingError, match="mode='rebuild'"):
         service.start_update([paper_id], from_stage="parse")
     with pytest.raises(ProcessingError, match="Unknown stage"):
-        service.start_update([paper_id], mode="rebuild", from_stage="outline")
+        service.start_update([paper_id], mode="rebuild", from_stage="publish")
 
 
 def test_execute_run_completes_and_records_events(tmp_path: Path) -> None:
@@ -215,6 +215,24 @@ def test_rebuild_from_summary_reruns_llm_stages(tmp_path: Path) -> None:
     assert len(second.prompts) == 2
     assert service.get_run(run.id).mode == "rebuild"
     assert service.get_run(run.id).from_stage == "summary"
+
+
+def test_rebuild_from_outline_reruns_only_outline(tmp_path: Path) -> None:
+    settings, database_path, data_dir = setup_library(tmp_path)
+    paper_id = add_parsed_paper(database_path, data_dir)
+    service = ProcessingService(settings)
+    service.execute_run(
+        service.start_update([paper_id]).id,
+        summary_provider=FakeProvider([valid_summary(), valid_outline()]),
+    )
+
+    provider = FakeProvider([valid_outline()])
+    run = service.start_update([paper_id], mode="rebuild", from_stage="outline")
+    result = service.execute_run(run.id, summary_provider=provider)
+
+    assert [paper.id for paper in result.updated] == [paper_id]
+    assert len(provider.prompts) == 1
+    assert service.get_run(run.id).from_stage == "outline"
 
 
 def test_continue_skips_completed_paper(tmp_path: Path) -> None:

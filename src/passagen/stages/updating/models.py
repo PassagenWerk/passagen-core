@@ -6,9 +6,8 @@ from passagen.storage.repository import PaperRecord
 
 LATEST_IMPLEMENTED_STATUS = PaperStatus.OUTLINED
 
-# Stages that can be explicitly rebuilt via ``from_stage``; ``outline`` cannot be
-# requested directly because rebuilding the summary already rebuilds the outline.
-REBUILD_STAGES = ("metadata", "parse", "summary")
+# Stages that can be explicitly rebuilt via ``from_stage``.
+REBUILD_STAGES = ("metadata", "parse", "summary", "outline")
 
 # Stage numbers aligned with PaperStatus progression:
 # discovered(0) -> metadata(1) -> parse(2) -> summary(3) -> outline(4).
