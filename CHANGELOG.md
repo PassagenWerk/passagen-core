@@ -4,6 +4,8 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-04
+
 ### Added
 
 - `passagen.processing`: adapter-independent `ProcessingService` with a persisted
