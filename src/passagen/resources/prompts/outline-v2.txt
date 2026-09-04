@@ -1,0 +1,15 @@
+Create a detailed English technical-paper outline using only the validated structured summary.
+Return JSON only. Do not translate, invent facts, or add placeholders.
+
+Organize the content into section theses, named subtopics, and supporting details rather than
+restating each top-level summary field as one bullet. Preserve quantitative values, comparison
+direction, conditions, baselines, and evidence pages. Use null or empty lists for unsupported
+content. Include limitations and conclusions when present in the summary.
+
+The result must validate against this JSON Schema:
+
+$schema
+
+Validated summary:
+
+$summary

@@ -1,0 +1,360 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from passagen.config import LlmSettings, PipelineSettings, ProvidersSettings, SummarizationSettings
+from passagen.domain import Paper, PaperStatus
+from passagen.parsing import ParsedPaper, ParsedSection
+from passagen.providers import LlmCallStats, LlmResponse, LlmStage
+from passagen.stages.summarization import StructuredSummary, SummaryError, summarize_paper
+from passagen.stages.updating import update_papers
+from passagen.storage.database import connect_database, initialize_database
+from passagen.storage.repository import register_pdf, save_parsed_artifact
+
+
+class FakeProvider:
+    provider_name = "fake"
+    model = "test-model"
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
+        del max_tokens
+        self.prompts.append(prompt)
+        return LlmResponse(self.responses.pop(0), input_tokens=10, output_tokens=5)
+
+
+def setup_parsed_paper(tmp_path: Path) -> tuple[Path, Path, str]:
+    data_dir = tmp_path / "data"
+    database_path = data_dir / "passagen.db"
+    initialize_database(database_path)
+    paper = Paper(original_filename="paper.pdf", pdf_sha256="a" * 64, file_size_bytes=1)
+    register_pdf(database_path, paper, Path("pdfs/aa/paper.pdf"))
+    parsed = ParsedPaper(
+        parser="test",
+        sections=(ParsedSection(title="Introduction", text="A test paper.", pages=(1,)),),
+    )
+    relative_path = Path("papers") / paper.id / "extracted.json"
+    content = (parsed.model_dump_json() + "\n").encode()
+    target = data_dir / relative_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(content)
+    save_parsed_artifact(
+        database_path,
+        paper.id,
+        relative_path,
+        version=parsed.schema_version,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=len(content),
+        status=PaperStatus.PARSED,
+    )
+    return database_path, data_dir, paper.id
+
+
+def valid_summary(title: str = "Test Paper") -> str:
+    return json.dumps({"identity": {"title": title, "authors": []}})
+
+
+def valid_outline() -> str:
+    return json.dumps(
+        {
+            "introduction": {
+                "thesis": "The paper introduces a test problem.",
+                "points": [],
+            }
+        }
+    )
+
+
+def test_summary_v2_separates_subject_and_baseline_values() -> None:
+    summary = StructuredSummary.model_validate(
+        {
+            "identity": {"title": "Test", "authors": []},
+            "evaluation": {
+                "results": [
+                    {
+                        "metric": "latency",
+                        "metric_direction": "lower_is_better",
+                        "subject": "New system",
+                        "subject_value": "1 ms",
+                        "baseline": "Baseline",
+                        "baseline_value": "2 ms",
+                        "improvement": "50% lower latency",
+                        "evidence_pages": [7],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert summary.schema_version == "2"
+    assert summary.evaluation.results[0].subject_value == "1 ms"
+    assert summary.evaluation.results[0].baseline_value == "2 ms"
+    with pytest.raises(ValidationError):
+        StructuredSummary.model_validate(
+            {
+                "identity": {"title": "Test", "authors": []},
+                "evaluation": {
+                    "key_results": [{"claim": "Ambiguous comparison", "value": "1 ms vs 2 ms"}]
+                },
+            }
+        )
+
+
+def test_summarize_saves_validated_json_yaml_and_call_audit(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    provider = FakeProvider(['{"facts": ["A test paper"]}', valid_summary()])
+    stats = LlmCallStats()
+
+    result = summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        provider=provider,
+        execution_log_dir=tmp_path / "logs" / "run",
+        llm_stats=stats,
+    )
+
+    assert result.updated is True
+    assert result.paper.status is PaperStatus.SUMMARIZED
+    assert result.summary is not None
+    assert result.summary.identity.title == "paper.pdf"
+    assert (data_dir / "papers" / paper_id / "summary.json").is_file()
+    assert (data_dir / "papers" / paper_id / "summary.yaml").is_file()
+    call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
+    fact_call = json.loads((call_dir / "facts-001.json").read_text(encoding="utf-8"))
+    assert fact_call["prompt"]
+    assert fact_call["response"] == '{"facts": ["A test paper"]}'
+    assert fact_call["max_tokens"] == 1500
+    assert stats.by_stage[LlmStage.FACT].calls == 1
+    assert stats.by_stage[LlmStage.SUMMARY].calls == 1
+    assert stats.total.total_tokens == 30
+    with connect_database(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 2
+        assert connection.execute("SELECT status FROM processing_runs").fetchone()[0] == "completed"
+
+
+def test_summarize_locally_removes_json_code_fence(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    provider = FakeProvider(['{"facts": []}', f"```json\n{valid_summary()}\n```"])
+
+    result = summarize_paper(
+        database_path, data_dir, paper_id, LlmSettings(), SummarizationSettings(), provider=provider
+    )
+
+    assert result.updated is True
+    assert len(provider.prompts) == 2
+
+
+def test_summarize_uses_llm_repair_for_schema_error(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    provider = FakeProvider(['{"facts": []}', '{"identity": {"title": 1}}', valid_summary()])
+
+    result = summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        provider=provider,
+        execution_log_dir=tmp_path / "logs" / "run",
+    )
+
+    assert result.updated is True
+    assert len(provider.prompts) == 3
+    assert (tmp_path / "logs" / "run" / "external" / "llm" / paper_id / "repair-1.json").is_file()
+
+
+def test_summarize_keeps_raw_response_when_repair_fails(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    provider = FakeProvider(['{"facts": []}', "not json", "still not json", "also not json"])
+
+    with pytest.raises(SummaryError, match="schema validation"):
+        summarize_paper(
+            database_path,
+            data_dir,
+            paper_id,
+            LlmSettings(),
+            SummarizationSettings(),
+            provider=provider,
+            execution_log_dir=tmp_path / "logs" / "run",
+        )
+
+    call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
+    assert json.loads((call_dir / "summary.json").read_text(encoding="utf-8"))["response"] == (
+        "not json"
+    )
+    assert (call_dir / "repair-2.json").is_file()
+    with connect_database(database_path) as connection:
+        assert connection.execute("SELECT status FROM processing_runs").fetchone()[0] == "failed"
+        assert connection.execute("SELECT status FROM papers").fetchone()[0] == "parsed"
+
+
+def test_summarize_retries_truncated_facts_with_more_output_tokens(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+
+    class TruncatingProvider(FakeProvider):
+        def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
+            self.prompts.append(prompt)
+            content = self.responses.pop(0)
+            truncated = len(self.prompts) == 1
+            return LlmResponse(
+                content,
+                input_tokens=10,
+                output_tokens=5,
+                finish_reason="length" if truncated else "stop",
+            )
+
+    provider = TruncatingProvider(
+        ['{"facts": ["truncat', '{"facts": ["A test paper"]}', valid_summary()]
+    )
+
+    result = summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        provider=provider,
+        execution_log_dir=tmp_path / "logs" / "run",
+    )
+
+    assert result.updated is True
+    assert len(provider.prompts) == 3
+    call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
+    assert (call_dir / "facts-001.json").is_file()
+    retry_call = json.loads((call_dir / "facts-001-retry-2.json").read_text(encoding="utf-8"))
+    assert retry_call["max_tokens"] == 3000
+
+
+def test_summarize_fails_when_facts_stay_truncated(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+
+    class AlwaysTruncatingProvider(FakeProvider):
+        def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
+            self.prompts.append(prompt)
+            return LlmResponse(
+                '{"facts": ["truncat',
+                input_tokens=10,
+                output_tokens=5,
+                finish_reason="length",
+            )
+
+    with pytest.raises(SummaryError, match="Extracted facts failed schema validation"):
+        summarize_paper(
+            database_path,
+            data_dir,
+            paper_id,
+            LlmSettings(),
+            SummarizationSettings(),
+            provider=AlwaysTruncatingProvider([]),
+            execution_log_dir=tmp_path / "logs" / "run",
+        )
+
+    call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
+    assert (call_dir / "facts-001-retry-3.json").is_file()
+    assert json.loads((call_dir / "facts-001-retry-3.json").read_text())["max_tokens"] == 6000
+
+
+def test_summarize_reuses_successful_section_facts_when_forced(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        provider=FakeProvider(['{"facts": ["A test paper"]}', valid_summary()]),
+    )
+    provider = FakeProvider([valid_summary("Rebuilt")])
+
+    result = summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        force=True,
+        provider=provider,
+    )
+
+    assert result.summary is not None
+    assert result.summary.identity.title == "paper.pdf"
+    assert len(provider.prompts) == 1
+
+
+def test_forced_summary_failure_stops_at_parsed(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    summarize_paper(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        SummarizationSettings(),
+        provider=FakeProvider(['{"facts": []}', valid_summary()]),
+    )
+
+    with pytest.raises(SummaryError):
+        summarize_paper(
+            database_path,
+            data_dir,
+            paper_id,
+            LlmSettings(),
+            SummarizationSettings(),
+            force=True,
+            provider=FakeProvider(["invalid", "invalid", "invalid"]),
+        )
+
+    with connect_database(database_path) as connection:
+        assert connection.execute("SELECT status FROM papers").fetchone()[0] == "parsed"
+
+
+def test_interrupted_summary_keeps_last_successful_status(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+
+    class InterruptingProvider(FakeProvider):
+        def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
+            del prompt, max_tokens
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        summarize_paper(
+            database_path,
+            data_dir,
+            paper_id,
+            LlmSettings(),
+            SummarizationSettings(),
+            provider=InterruptingProvider([]),
+        )
+
+    with connect_database(database_path) as connection:
+        assert connection.execute("SELECT status FROM papers").fetchone()[0] == "parsed"
+        run = connection.execute("SELECT status, error_message FROM processing_runs").fetchone()
+        assert tuple(run) == ("failed", "interrupted")
+
+
+def test_update_advances_parsed_paper_to_outline_when_llm_is_enabled(tmp_path: Path) -> None:
+    database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
+    provider = FakeProvider(['{"facts": []}', valid_summary(), valid_outline()])
+
+    result = update_papers(
+        database_path,
+        data_dir,
+        ProvidersSettings(),
+        PipelineSettings(),
+        summary_provider=provider,
+    )
+
+    assert result.target_status is PaperStatus.OUTLINED
+    assert [paper.id for paper in result.updated] == [paper_id]
+    assert result.updated[0].status is PaperStatus.OUTLINED
+    assert len(provider.prompts) == 3

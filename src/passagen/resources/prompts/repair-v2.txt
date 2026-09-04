@@ -1,0 +1,14 @@
+Repair the candidate into JSON that validates against the supplied schema. Return JSON only.
+Preserve the candidate's supported facts and do not add new information.
+
+Schema:
+
+$schema
+
+Validation error:
+
+$validation_error
+
+Candidate:
+
+$candidate

@@ -1,0 +1,22 @@
+Create a detailed English structured paper summary using only the extracted facts and supplied
+identity. Return JSON only. Do not invent facts. Use null or empty lists when unsupported.
+
+Preserve the ownership, direction, units, conditions, and baseline of every quantitative result.
+Do not claim that one system outperforms another unless the supplied values establish that
+direction. Every evaluation.results and evaluation.ablations item must include evidence_pages from
+the facts. Keep subject_value and baseline_value ownership explicit.
+
+Identity fields are authoritative metadata supplied by Passagen. Copy them exactly; Passagen will
+replace the generated identity with its database values before saving.
+
+The result must validate against this JSON Schema:
+
+$schema
+
+Paper identity:
+
+$identity
+
+Extracted facts:
+
+$facts

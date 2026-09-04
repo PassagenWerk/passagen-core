@@ -1,0 +1,88 @@
+image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+
+cache:
+  key: python-${CI_COMMIT_REF_SLUG}
+  paths:
+    - .uv-cache/
+
+before_script:
+  - uv sync --frozen
+
+ruff:
+  stage: lint
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+
+basedpyright:
+  stage: lint
+  script:
+    - uv run basedpyright
+
+mypy:
+  stage: lint
+  script:
+    - uv run mypy
+
+pytest:
+  stage: test
+  script:
+    - mkdir -p reports/pytest reports/coverage
+    - >
+      uv run python scripts/pytest_parallel.py
+      -o addopts=""
+      -m "not slow"
+      --import-mode=importlib
+      --cov=passagen
+      --cov-report=term-missing
+      --cov-report=xml:reports/coverage/coverage.xml
+      --junitxml=reports/pytest/junit.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: reports/pytest/junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: reports/coverage/coverage.xml
+    paths:
+      - reports/pytest/junit.xml
+      - reports/coverage/coverage.xml
+
+pytest-slow:
+  stage: test
+  variables:
+    PASSAGEN_PYTEST_WORKERS: "4"
+  script:
+    - mkdir -p reports/pytest
+    - >
+      uv run python scripts/pytest_parallel.py
+      -o addopts=""
+      -m slow
+      --import-mode=importlib
+      --junitxml=reports/pytest/slow-junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: reports/pytest/slow-junit.xml
+    paths:
+      - reports/pytest/slow-junit.xml
+
+build-package:
+  stage: build
+  script:
+    - uv build
+  artifacts:
+    expire_in: never
+    paths:
+      - dist/
+  rules:
+    - if: $CI_COMMIT_TAG

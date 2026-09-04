@@ -1,0 +1,86 @@
+[project]
+name = "passagen-core"
+version = "0.1.1"
+description = "Core services for managing and processing Passagen paper libraries"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.14,<2",
+    "httpx>=0.28,<1",
+    "pydantic-settings>=2.8,<3",
+    "pymupdf>=1.25,<2",
+    "pyyaml>=6,<7",
+    "sqlalchemy>=2.0,<3",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39,<2",
+    "mypy>=1.18,<2",
+    "pre-commit>=4.2,<5",
+    "pytest>=8.3,<9",
+    "pytest-cov>=6,<8",
+    "pytest-xdist[psutil]>=3.8,<4",
+    "ruff>=0.11,<1",
+    "types-psutil>=7.2,<8",
+    "types-pyyaml>=6.0.12,<7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: end-to-end workflows excluded from the default local test run"]
+addopts = [
+    "--import-mode=importlib",
+    "-m",
+    "not slow",
+    "--cov=passagen",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["passagen"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["src", "tests", "scripts"]
+extraPaths = ["src"]
+exclude = ["**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+files = ["src", "tests", "scripts"]
+explicit_package_bases = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/passagen"]

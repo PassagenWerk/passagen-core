@@ -1,0 +1,19 @@
+Extract evidence-backed facts needed for a detailed technical paper summary.
+
+Cover every category supported by the target schema when the source provides evidence: context,
+problem, motivation, goals, non-goals, assumptions, limitations of prior work, contributions,
+design components, processes, mechanisms, component interactions, design decisions, implementation
+details, experimental environment, baselines, workloads, metrics, methodology, quantitative
+results, ablations, limitations, trade-offs, threats to validity, conclusions, and related work.
+
+Return JSON only and validate it against this schema:
+
+$schema
+
+Preserve metric ownership and comparison direction. Do not merge unrelated measurements. Each
+fact must be a concise English statement and include source page numbers in the text when known.
+Do not infer unsupported facts.
+
+<source>
+$chunk
+</source>

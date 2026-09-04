@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import os
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_CONFIG_PATH = Path("passagen.yaml")
+ENV_PREFIX = "PASSAGEN_"
+
+
+class CrossrefSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: str = "https://api.crossref.org"
+    mailto: str | None = None
+    timeout_seconds: float = Field(default=10.0, gt=0)
+
+
+class ArxivSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: str = "https://export.arxiv.org"
+    timeout_seconds: float = Field(default=10.0, gt=0)
+
+
+class GrobidSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = "http://localhost:8070"
+    timeout_seconds: float = Field(default=60.0, gt=0)
+
+
+class LlmSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    api_key_env: str = "PASSAGEN_API_KEY"
+    timeout_seconds: float = Field(default=120.0, gt=0)
+    disable_thinking: bool = False
+
+
+class ProvidersSettings(BaseModel):
+    """External provider services, grouped by provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    healthcheck_timeout_seconds: float = Field(default=3.0, gt=0)
+    crossref: CrossrefSettings = Field(default_factory=CrossrefSettings)
+    arxiv: ArxivSettings = Field(default_factory=ArxivSettings)
+    grobid: GrobidSettings = Field(default_factory=GrobidSettings)
+    llm: LlmSettings = Field(default_factory=LlmSettings)
+
+
+class ParserBackend(StrEnum):
+    AUTO = "auto"
+    GROBID = "grobid"
+    PYMUPDF = "pymupdf"
+
+
+class MetadataSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_pages: int = Field(default=2, ge=1, le=10)
+
+
+class ParsingSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parser: ParserBackend = ParserBackend.AUTO
+    min_text_characters: int = Field(default=10, ge=1)
+
+
+class SummarizationSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_chunk_characters: int = Field(default=12_000, ge=1_000)
+    fact_max_output_tokens: int = Field(default=1_500, ge=100)
+    summary_max_output_tokens: int = Field(default=3_000, ge=100)
+    facts_prompt_path: Path | None = None
+    summary_prompt_path: Path | None = None
+    repair_prompt_path: Path | None = None
+
+
+class OutliningSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_output_tokens: int = Field(default=4_000, ge=100)
+    prompt_path: Path | None = None
+
+
+class PipelineSettings(BaseModel):
+    """Processing stage parameters, grouped by stage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metadata: MetadataSettings = Field(default_factory=MetadataSettings)
+    parsing: ParsingSettings = Field(default_factory=ParsingSettings)
+    summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
+    outlining: OutliningSettings = Field(default_factory=OutliningSettings)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX,
+        env_nested_delimiter="__",
+        extra="forbid",
+    )
+
+    data_dir: Path = Path("data")
+    database_path: Path | None = None
+    debug: bool = False
+    providers: ProvidersSettings = Field(default_factory=ProvidersSettings)
+    pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
+
+    @property
+    def resolved_data_dir(self) -> Path:
+        return self.data_dir.expanduser().resolve()
+
+    @property
+    def resolved_database_path(self) -> Path:
+        if self.database_path:
+            return self.database_path.expanduser().resolve()
+        return self.resolved_data_dir / "passagen.db"
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def load_settings(
+    config_path: Path | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> Settings:
+    path = (config_path or DEFAULT_CONFIG_PATH).expanduser()
+    values = _read_config(path) if path.exists() else {}
+
+    _remove_environment_overrides(values)
+    values.update({key: value for key, value in (overrides or {}).items() if value is not None})
+
+    try:
+        return Settings(**values)
+    except ValidationError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    try:
+        with path.open(encoding="utf-8") as config_file:
+            document = yaml.safe_load(config_file)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError(f"Cannot read config {path}: {exc}") from exc
+
+    if document is None:
+        return {}
+    if not isinstance(document, dict):
+        raise ConfigError(f"Config {path} must contain a mapping")
+
+    if "passagen" not in document:
+        return document
+
+    unknown_sections = set(document) - {"passagen", "providers", "pipeline"}
+    if unknown_sections:
+        names = ", ".join(sorted(str(name) for name in unknown_sections))
+        raise ConfigError(f"Config {path} contains unknown sections: {names}")
+
+    passagen_values = document["passagen"]
+    if not isinstance(passagen_values, dict):
+        raise ConfigError(f"Config {path} section 'passagen' must contain a mapping")
+    values = dict(passagen_values)
+    if "providers" in document:
+        values["providers"] = document["providers"]
+    if "pipeline" in document:
+        values["pipeline"] = document["pipeline"]
+    return values
+
+
+def _remove_environment_overrides(values: dict[str, Any]) -> None:
+    for environment_name in os.environ:
+        if not environment_name.startswith(ENV_PREFIX):
+            continue
+        path = environment_name.removeprefix(ENV_PREFIX).lower().split("__")
+        current: dict[str, Any] = values
+        for part in path[:-1]:
+            nested = current.get(part)
+            if not isinstance(nested, dict):
+                break
+            current = nested
+        else:
+            current.pop(path[-1], None)
