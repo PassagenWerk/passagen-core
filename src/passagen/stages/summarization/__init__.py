@@ -1,4 +1,9 @@
-from passagen.stages.summarization.schema import SUMMARY_SCHEMA_VERSION, StructuredSummary
+from passagen.stages.summarization.schema import (
+    SUMMARY_SCHEMA_VERSION,
+    EvidenceItem,
+    ExtractedEvidence,
+    StructuredSummary,
+)
 from passagen.stages.summarization.service import (
     SummaryError,
     SummaryResult,
@@ -7,6 +12,8 @@ from passagen.stages.summarization.service import (
 
 __all__ = [
     "SUMMARY_SCHEMA_VERSION",
+    "EvidenceItem",
+    "ExtractedEvidence",
     "StructuredSummary",
     "SummaryError",
     "SummaryResult",

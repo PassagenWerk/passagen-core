@@ -14,6 +14,7 @@ from passagen.config.models import (
     ProvidersSettings,
     Settings,
     SummarizationSettings,
+    SummarizationStrategy,
     load_settings,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "ProvidersSettings",
     "Settings",
     "SummarizationSettings",
+    "SummarizationStrategy",
     "load_settings",
 ]

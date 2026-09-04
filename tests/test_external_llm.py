@@ -29,12 +29,12 @@ def test_tracked_llm_provider_aggregates_usage_by_stage() -> None:
         FakeProvider(LlmResponse("{}", input_tokens=20, output_tokens=5)), stats
     )
 
-    provider.generate(LlmStage.FACT, "facts", max_tokens=100)
-    provider.generate(LlmStage.FACT, "facts", max_tokens=100)
+    provider.generate(LlmStage.EVIDENCE, "evidence", max_tokens=100)
+    provider.generate(LlmStage.EVIDENCE, "evidence", max_tokens=100)
     provider.generate(LlmStage.SUMMARY, "summary", max_tokens=100)
 
-    assert stats.by_stage[LlmStage.FACT].calls == 2
-    assert stats.by_stage[LlmStage.FACT].total_tokens == 50
+    assert stats.by_stage[LlmStage.EVIDENCE].calls == 2
+    assert stats.by_stage[LlmStage.EVIDENCE].total_tokens == 50
     assert stats.by_stage[LlmStage.SUMMARY].input_tokens == 20
     assert stats.total.calls == 3
     assert stats.total.input_tokens == 60

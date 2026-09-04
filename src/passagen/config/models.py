@@ -38,6 +38,8 @@ class GrobidSettings(BaseModel):
 
 
 class LlmSettings(BaseModel):
+    """Global LLM call parameters shared by every LLM-powered stage."""
+
     model_config = ConfigDict(extra="forbid")
 
     base_url: str = "https://api.openai.com/v1"
@@ -45,6 +47,10 @@ class LlmSettings(BaseModel):
     api_key_env: str = "PASSAGEN_API_KEY"
     timeout_seconds: float = Field(default=120.0, gt=0)
     disable_thinking: bool = False
+    context_window_tokens: int = Field(default=128_000, ge=1_000)
+    max_context_utilization: float = Field(default=0.65, gt=0, le=1.0)
+    safety_margin_tokens: int = Field(default=8_000, ge=0)
+    chars_per_token: float = Field(default=4.0, gt=0)
 
 
 class ProvidersSettings(BaseModel):
@@ -78,14 +84,26 @@ class ParsingSettings(BaseModel):
     min_text_characters: int = Field(default=10, ge=1)
 
 
+class SummarizationStrategy(StrEnum):
+    AUTO = "auto"
+    FULL = "full"
+    HIERARCHICAL = "hierarchical"
+
+
 class SummarizationSettings(BaseModel):
+    """Summary strategy and chunking parameters; global LLM limits live in providers.llm."""
+
     model_config = ConfigDict(extra="forbid")
 
-    max_chunk_characters: int = Field(default=12_000, ge=1_000)
+    strategy: SummarizationStrategy = SummarizationStrategy.AUTO
+    chunk_max_input_tokens: int = Field(default=24_000, ge=1_000)
+    chunk_overlap_paragraphs: int = Field(default=1, ge=0, le=5)
     fact_max_output_tokens: int = Field(default=1_500, ge=100)
     summary_max_output_tokens: int = Field(default=3_000, ge=100)
     facts_prompt_path: Path | None = None
     summary_prompt_path: Path | None = None
+    full_prompt_path: Path | None = None
+    reduce_prompt_path: Path | None = None
     repair_prompt_path: Path | None = None
 
 

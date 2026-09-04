@@ -1,0 +1,17 @@
+Condense the supplied structured evidence into a smaller evidence bundle that keeps every
+quantitative result, baseline comparison, limitation, and conclusion.
+
+Rules:
+- Merge duplicate claims into one item and keep the union of their evidence_pages.
+- Preserve subject, subject_value, baseline, baseline_value, units, conditions, section, and
+  source_excerpt for every quantitative result.
+- Keep conflicting items side by side with their conditions; never silently pick one.
+- Do not add facts that are not present in the supplied evidence.
+
+Return JSON only and validate it against this schema:
+
+$schema
+
+Evidence to condense:
+
+$evidence

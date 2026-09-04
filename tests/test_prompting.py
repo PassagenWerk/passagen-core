@@ -7,7 +7,7 @@ from passagen.prompting import PromptTemplateError, load_prompt_template
 
 def test_builtin_prompt_validates_and_renders_declared_variables() -> None:
     template = load_prompt_template(
-        "facts-v2.txt",
+        "evidence-v3.txt",
         None,
         variables={"schema", "chunk"},
     )

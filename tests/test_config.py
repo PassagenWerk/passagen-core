@@ -53,7 +53,8 @@ pipeline:
   parsing:
     parser: pymupdf
   summarization:
-    max_chunk_characters: 2000
+    strategy: hierarchical
+    chunk_max_input_tokens: 8000
 """
     )
     monkeypatch.setenv("PASSAGEN_PROVIDERS__CROSSREF__TIMEOUT_SECONDS", "3.5")
@@ -68,7 +69,8 @@ pipeline:
     assert settings.providers.grobid.timeout_seconds == 30
     assert settings.pipeline.parsing.parser.value == "pymupdf"
     assert settings.providers.llm.model == "test-model"
-    assert settings.pipeline.summarization.max_chunk_characters == 2000
+    assert settings.pipeline.summarization.strategy.value == "hierarchical"
+    assert settings.pipeline.summarization.chunk_max_input_tokens == 8000
     assert settings.pipeline.outlining.max_output_tokens == 4000
 
 

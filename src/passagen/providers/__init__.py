@@ -1,3 +1,4 @@
+from passagen.providers.budget import TokenBudget
 from passagen.providers.health import (
     ProviderHealthSnapshot,
     ProviderStatus,
@@ -16,6 +17,7 @@ from passagen.providers.llm import (
 )
 
 __all__ = [
+    "TokenBudget",
     "ProviderHealthSnapshot",
     "ProviderStatus",
     "ProviderUnavailableError",

@@ -13,7 +13,6 @@ ParsedPaper
   -> 计算完整请求的 token 预算
   -> 全文可舒适容纳
        -> 直接根据全文生成 StructuredSummary
-       -> 可选：分块核验关键事实
   -> 全文无法舒适容纳
        -> 按章节和段落提取结构化 evidence
        -> 合并、去重并处理冲突
@@ -21,8 +20,8 @@ ParsedPaper
 ```
 
 普通长度论文优先使用全文生成。全文输入低于可用上下文预算时，这种方式通常具有更好的
-全局结构理解、跨章节关联和摘要连贯性。分块流程用于超长论文以及可选的事实核验，不再
-作为所有论文的默认信息瓶颈。
+全局结构理解、跨章节关联和摘要连贯性。分块流程仅用于超长论文，不再作为所有论文的默认
+信息瓶颈。
 
 ## 当前实现
 
@@ -58,7 +57,7 @@ ParsedPaper
 - 中间 evidence 保留页码、章节、事实类别和定量结果的归属关系。
 - 最终 Summary prompt 的大小同样受预算约束，不将无限增长的 facts 一次性拼接。
 - 保留 Schema 校验、响应修复、调用审计和可复用缓存能力。
-- 策略选择和实际 token 使用可观测，便于进行质量与成本比较。
+- 策略选择和实际 token 使用可观测。
 
 ## 非目标
 
@@ -66,7 +65,7 @@ ParsedPaper
 - 首阶段不实现跨论文检索或外部知识增强。
 - 不根据模型名称硬编码供应商特定的 context window。
 - 不以填满模型声明的最大上下文为目标；长上下文本身不保证模型能同等关注所有位置。
-- 不用自动指标完全替代人工质量评审。
+- 不引入 tokenizer 依赖做精确 token 计数，也不建设 benchmark 评测体系。
 
 ## 策略选择
 
@@ -101,36 +100,46 @@ context window 的 15% 到 20%。对于超大上下文模型，可以进一步�
 
 ### 配置方向
 
-现有 `max_chunk_characters` 应逐步替换为 token 语义配置。建议的配置形态如下，最终字段名
-可在实现阶段根据配置模型进一步收敛：
+配置分为两层：与模型能力相关的全局 LLM 调用参数放在现有的 `providers.llm` 段（之后其它
+LLM 调用，如 outline，也复用同一套参数）；`pipeline.summarization` 只保留与
+summary 策略和切块方式相关的配置。
 
 ```yaml
-pipeline:
-  summarization:
-    strategy: auto
+providers:
+  llm:
+    # 全局 LLM 调用参数，对所有 LLM 调用生效
     context_window_tokens: 128000
     max_context_utilization: 0.65
     safety_margin_tokens: 8000
+    chars_per_token: 4.0
+
+pipeline:
+  summarization:
+    # 仅与 summary 策略和切块方式相关的配置
+    strategy: auto
     chunk_max_input_tokens: 24000
     chunk_overlap_paragraphs: 1
     fact_max_output_tokens: 3000
     summary_max_output_tokens: 6000
-    verify_key_facts: false
 ```
 
 `context_window_tokens` 由用户或部署配置明确提供。OpenAI-compatible API 通常不会可靠地
-返回模型上下文上限，不能仅根据 `model` 字符串推断。
+返回模型上下文上限，不能仅根据 `model` 字符串推断。现有 `max_chunk_characters` 应逐步
+替换为上述 token 语义配置。
 
 ### Token 估算
 
-首个版本需要提供统一的 `TokenEstimator` 接口，供全文路由、chunk builder 和最终汇总
-共同使用。实现应满足：
+首个版本的 Token 估算保持简单：按字符数乘以系数估算，不引入 tokenizer 依赖。
 
-- 能使用已知 tokenizer 时优先进行精确估算。
-- 未知代理模型使用保守估算，并记录 estimator 类型。
+```text
+estimated_tokens = char_count / chars_per_token
+```
+
+- `chars_per_token` 是可配置的全局参数，英文文本默认值约为 4.0；用户可按所用模型和
+  语料语言调整。这是保守估算，安全余量用于吸收估算误差。
 - 预算对象同时包含 prompt、Schema、source、输出上限和安全余量。
-- 请求发送前再次检查序列化后的完整 prompt，而不是只估算原始论文正文。
-- API 返回 usage 后记录估算值与实际 `input_tokens` 的偏差。
+- 请求发送前对序列化后的完整 prompt 做一次估算检查，而不是只估算原始论文正文。
+- API 返回 usage 后记录估算值与实际 `input_tokens` 的偏差，便于用户校准系数。
 
 ## 全文模式
 
@@ -217,20 +226,6 @@ evidence bundle，最终请求再组合这些 bundle。
 不得简单截断 facts 列表，因为论文后部的 limitations、threats 和 conclusions 会因此被
 系统性丢失。
 
-## 可选事实核验
-
-在追求最高质量且允许增加调用成本时，全文模式生成 Summary 后，可以按章节核验以下高
-风险字段：
-
-- 定量结果与 ablation。
-- baseline 和比较方向。
-- 实验条件、数据集和工作负载。
-- contribution 的原文支持。
-- limitations、trade-offs 和 threats to validity。
-
-核验阶段只返回发现的问题和对应 evidence，不重新生成完整 Summary。随后执行一次受
-Schema 约束的修订请求。该能力默认关闭，避免改变普通运行的成本预期。
-
 ## Prompt 与 Artifact 版本
 
 本改进会改变输入形态和中间 Schema，应按独立版本管理：
@@ -247,29 +242,14 @@ Schema 约束的修订请求。该能力默认关闭，避免改变普通运行�
 
 ## 实施阶段
 
-### M0：质量基线
+### M1：全局 LLM 配置与全文模式
 
 工作内容：
 
-- 选择不同长度和类型的代表性论文，建立固定 benchmark corpus。
-- 保存当前 12,000 字符 Map-Reduce 的输出作为 baseline。
-- 增加可重复运行 `full` 与 `hierarchical` 策略的测试入口。
-- 定义人工评分表和机器可检查指标。
-
-验收条件：
-
-- 同一论文、模型、prompt 和配置可以重复执行三种策略并保存调用明细。
-- 每次运行能够比较调用次数、input/output token、耗时和 Schema 成功率。
-- benchmark 不依赖生产数据目录，且不会覆盖用户 artifact。
-
-### M1：统一 Token 预算与全文模式
-
-工作内容：
-
-- 实现 `TokenEstimator` 和请求预算对象。
+- 增加全局 `llm` 配置段：context window、安全余量、输出上限、`chars_per_token`。
+- 实现基于字符数系数的 Token 估算和请求预算对象。
 - 增加 `auto`、`full`、`hierarchical` 策略配置。
-- 实现 `ParsedPaper` 的稳定全文序列化。
-- 增加全文 Summary prompt。
+- 实现 `ParsedPaper` 的稳定全文序列化和全文 Summary prompt。
 - 在请求发送前校验完整 prompt 和输出预算。
 - 记录策略选择、预算和实际 usage。
 
@@ -313,66 +293,34 @@ Schema 约束的修订请求。该能力默认关闭，避免改变普通运行�
 - evidence 总量超过最终预算时不会依赖尾部截断。
 - 缓存不会跨不兼容的 prompt、Schema 或 chunker 版本复用。
 
-### M4：关键事实核验
+### M4：收尾
 
 工作内容：
 
-- 增加可选的高风险字段核验流程。
-- 将核验结果作为 patch 输入修订 Summary。
-- 对核验调用单独统计成本和失败原因。
-
-验收条件：
-
-- 核验只修改存在 evidence 支持的问题字段。
-- 核验失败不会覆盖已经通过 Schema 校验的初始 Summary。
-- 默认关闭时不增加 LLM 调用。
-
-### M5：评测与默认值收敛
-
-工作内容：
-
-- 在 benchmark corpus 上比较旧 Map-Reduce、全文模式和新分层模式。
-- 根据模型能力调整默认利用率、chunk 大小和输出预算。
 - 同步 README、example config、design 和 operations 文档。
 - 删除过渡期的字符切块配置。
 
 验收条件：
 
-- 新默认策略在人工评分中不低于旧 baseline。
-- 数值归属、baseline 方向和 evidence page 错误率有可量化下降。
 - 配置文档和代码默认值保持一致。
 - `passagen config check` 能发现缺失 context window 和不合法预算。
 
-## 质量评测
+## 质量检查
 
-质量比较必须使用同一模型、temperature、论文解析结果和输出 Schema。至少评估：
+不建设独立的 benchmark 体系。每个阶段完成后，用少量代表性论文（短论文、典型系统
+论文、超过全文预算的长论文各一篇）人工抽查以下方面：
 
-| 维度 | 判断方式 |
-|---|---|
-| 事实准确性 | Summary 中的 claim 是否能在原文找到支持 |
-| 覆盖率 | 问题、贡献、设计、实现、实验和限制是否遗漏 |
-| 定量正确性 | 主体、baseline、值、单位、方向和条件是否匹配 |
-| 全局连贯性 | 问题、设计和实验结论之间是否形成正确关系 |
-| 可溯源性 | evidence pages 是否真实支持对应字段 |
-| 去重与冲突 | 是否重复同一结果，是否掩盖互相冲突的证据 |
-| 稳定性 | 多次运行的结构和关键事实是否一致 |
-| 成本 | 调用次数、token、耗时和失败重试次数 |
-
-建议 benchmark 至少覆盖：
-
-- 短论文和 workshop paper。
-- 典型 10 到 30 页系统论文。
-- 带大量表格和 ablation 的实验论文。
-- 超过单次全文预算的长论文。
-- 解析结构完整和结构较差的论文。
-
-最终默认策略应以人工事实评审为主，自动指标用于发现回归，不能仅通过摘要文本相似度决定。
+- Summary 中的定量 claim 是否能在原文找到支持，主体、baseline 和方向是否正确。
+- 问题、贡献、设计、实验和限制是否有明显遗漏。
+- evidence pages 是否真实支持对应字段。
+- 重叠切块是否造成重复结果，超长论文是否丢失结尾的 limitations 和 conclusions。
+- 多次运行的结构和关键事实是否稳定。
 
 ## 测试范围
 
 单元测试：
 
-- token 预算边界和安全余量。
+- token 估算边界和安全余量。
 - `auto` 策略路由。
 - 全文和 chunk prompt 的完整预算。
 - 章节、段落、句子和超长单元切块。
@@ -403,5 +351,4 @@ Schema 约束的修订请求。该能力默认关闭，避免改变普通运行�
 - 生产路径不再使用固定字符硬切作为主要策略。
 - 分块 evidence 能保留定量关系、章节和页码。
 - 最终 reduce 不会因 facts 数量增长而无界扩张或静默截断。
-- benchmark 证明新策略在事实准确性和整体质量上优于或不低于旧实现。
 - 配置、README、design、operations 和示例文件中的默认值及术语一致。

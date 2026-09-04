@@ -1,0 +1,24 @@
+Create a detailed English structured paper summary directly from the complete paper text below.
+Return JSON only. Use only facts stated in the paper. Use null or empty lists when the paper
+provides no evidence.
+
+Preserve the ownership, direction, units, conditions, and baseline of every quantitative result.
+Do not claim that one system outperforms another unless the stated values establish that
+direction. Every evaluation.results and evaluation.ablations item must include evidence_pages
+taken from the page numbers shown in the serialized paper sections. Keep subject_value and
+baseline_value ownership explicit.
+
+Identity fields are authoritative metadata supplied by Passagen. Copy them exactly; Passagen will
+replace the generated identity with its database values before saving.
+
+The result must validate against this JSON Schema:
+
+$schema
+
+Paper identity:
+
+$identity
+
+Complete serialized paper:
+
+$paper

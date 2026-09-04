@@ -15,7 +15,7 @@ OpenAICompatibleProvider = ExternalOpenAICompatibleProvider
 
 
 class LlmStage(StrEnum):
-    FACT = "fact"
+    EVIDENCE = "evidence"
     SUMMARY = "summary"
     OUTLINE = "outline"
 

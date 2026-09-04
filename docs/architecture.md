@@ -54,7 +54,7 @@ Settings + command input
   -> discovered Paper
   -> resolved PaperMetadata
   -> ParsedPaper artifact
-  -> section fact artifacts
+  -> full-paper prompt or semantic chunk evidence artifacts
   -> validated StructuredSummary artifact
   -> English outline artifact
   -> outlined Paper

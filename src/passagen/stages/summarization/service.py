@@ -10,12 +10,13 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from passagen.config import LlmSettings, SummarizationSettings
+from passagen.config import LlmSettings, SummarizationSettings, SummarizationStrategy
 from passagen.domain import PaperStatus
-from passagen.parsing import ParsedPaper, ParsedSection
+from passagen.parsing import ParsedPaper
 from passagen.prompting import (
     PromptTemplate,
     PromptTemplateError,
+    SummaryPromptTemplates,
     load_summary_prompt_templates,
 )
 from passagen.providers import (
@@ -27,13 +28,17 @@ from passagen.providers import (
     OpenAICompatibleProvider,
     ProviderHealthSnapshot,
     ProviderUnavailableError,
+    TokenBudget,
     TrackedLlmProvider,
     retry_truncated_response,
 )
 from passagen.stages.progress import ProgressCallback, report_progress
+from passagen.stages.summarization.chunking import PaperChunk, build_chunks
+from passagen.stages.summarization.evidence import group_by_domain, merge_evidence
 from passagen.stages.summarization.schema import (
     SUMMARY_SCHEMA_VERSION,
-    ExtractedFacts,
+    EvidenceItem,
+    ExtractedEvidence,
     StructuredSummary,
     SummaryIdentity,
 )
@@ -51,7 +56,7 @@ from passagen.storage.repository import (
 )
 
 logger = logging.getLogger(__name__)
-SUMMARY_PROMPT_VERSION = "2"
+SUMMARY_PROMPT_VERSION = "3"
 EXTRACTED_ARTIFACT_KIND = "extracted_json"
 SUMMARY_ARTIFACT_KIND = "summary_json"
 
@@ -105,6 +110,8 @@ def summarize_paper(
             summarization.facts_prompt_path,
             summarization.summary_prompt_path,
             summarization.repair_prompt_path,
+            summarization.full_prompt_path,
+            summarization.reduce_prompt_path,
         )
     except PromptTemplateError as exc:
         raise SummaryError(str(exc)) from exc
@@ -116,44 +123,54 @@ def summarize_paper(
             raise SummaryError(str(exc)) from exc
     llm = TrackedLlmProvider(provider or OpenAICompatibleProvider(settings), llm_stats)
     run_id = start_processing_run(database_path, paper_id, "summarize")
-    facts_dir = data_dir / "papers" / paper_id / "summary" / "facts"
+    evidence_dir = data_dir / "papers" / paper_id / "summary" / "evidence"
     call_log_dir = (
         execution_log_dir / "external" / "llm" / paper_id if execution_log_dir is not None else None
     )
+    budget = TokenBudget.from_settings(settings)
     try:
-        facts = _section_facts(
+        strategy = _resolve_strategy(
+            summarization.strategy,
+            budget,
+            prompts.full,
+            paper,
             parsed,
-            facts_dir,
-            summarization.max_chunk_characters,
-            summarization.fact_max_output_tokens,
-            call_log_dir,
-            llm,
-            database_path,
-            run_id,
-            progress,
-            prompts.facts,
-        )
-        report_progress(progress, "Generating structured summary...")
-        raw_response = _generate(
-            llm,
-            _summary_prompt(prompts.summary, paper, facts),
-            database_path,
-            run_id,
-            call_log_dir / "summary.json" if call_log_dir is not None else None,
-            "summary",
             summarization.summary_max_output_tokens,
-            LlmStage.SUMMARY,
         )
-        summary = _validate_or_repair(
-            raw_response.content,
-            llm,
-            database_path,
-            run_id,
-            call_log_dir,
-            summarization.summary_max_output_tokens,
-            progress,
-            prompts.repair,
+        logger.info(
+            "summary strategy: paper_id=%s configured=%s selected=%s",
+            paper_id,
+            summarization.strategy.value,
+            strategy.value,
         )
+        report_progress(progress, f"Summarizing with the {strategy.value} strategy...")
+        if strategy is SummarizationStrategy.FULL:
+            summary = _summarize_full(
+                parsed,
+                paper,
+                prompts.full,
+                prompts.repair,
+                llm,
+                database_path,
+                run_id,
+                call_log_dir,
+                summarization.summary_max_output_tokens,
+                progress,
+            )
+        else:
+            summary = _summarize_hierarchical(
+                parsed,
+                paper,
+                prompts,
+                budget,
+                llm,
+                database_path,
+                run_id,
+                call_log_dir,
+                evidence_dir,
+                summarization,
+                progress,
+            )
         summary = summary.model_copy(update={"identity": _summary_identity(paper)})
         json_path = Path("papers") / paper_id / "summary.json"
         yaml_path = Path("papers") / paper_id / "summary.yaml"
@@ -187,10 +204,168 @@ def summarize_paper(
     return SummaryResult(updated, artifact, summary, updated=True)
 
 
-def _section_facts(
+def _resolve_strategy(
+    configured: SummarizationStrategy,
+    budget: TokenBudget,
+    full_template: PromptTemplate,
+    paper: PaperRecord,
     parsed: ParsedPaper,
-    facts_dir: Path,
-    max_chunk_characters: int,
+    max_output_tokens: int,
+) -> SummarizationStrategy:
+    if configured is SummarizationStrategy.HIERARCHICAL:
+        return SummarizationStrategy.HIERARCHICAL
+    prompt = _full_prompt(full_template, paper, parsed)
+    estimated = budget.estimate_tokens(prompt)
+    available = budget.available_input_tokens(max_output_tokens)
+    fits = estimated <= available
+    logger.info(
+        "summary budget: estimated_full_tokens=%d available_input_tokens=%d fits=%s",
+        estimated,
+        available,
+        fits,
+    )
+    if configured is SummarizationStrategy.FULL:
+        if not fits:
+            raise SummaryError(
+                "Full-paper summary request exceeds the context budget: estimated "
+                f"{estimated} input tokens, available {available}. Use strategy 'auto' or "
+                "'hierarchical', or adjust the providers.llm budget settings."
+            )
+        return SummarizationStrategy.FULL
+    return SummarizationStrategy.FULL if fits else SummarizationStrategy.HIERARCHICAL
+
+
+def _summarize_full(
+    parsed: ParsedPaper,
+    paper: PaperRecord,
+    full_template: PromptTemplate,
+    repair_template: PromptTemplate,
+    provider: TrackedLlmProvider,
+    database_path: Path,
+    run_id: str,
+    call_log_dir: Path | None,
+    max_output_tokens: int,
+    progress: ProgressCallback | None,
+) -> StructuredSummary:
+    report_progress(progress, "Generating structured summary from the full paper...")
+    raw_response = _generate(
+        provider,
+        _full_prompt(full_template, paper, parsed),
+        database_path,
+        run_id,
+        call_log_dir / "summary-full.json" if call_log_dir is not None else None,
+        "summary (full)",
+        max_output_tokens,
+        LlmStage.SUMMARY,
+    )
+    return _validate_or_repair(
+        raw_response.content,
+        provider,
+        database_path,
+        run_id,
+        call_log_dir,
+        max_output_tokens,
+        progress,
+        repair_template,
+    )
+
+
+def _summarize_hierarchical(
+    parsed: ParsedPaper,
+    paper: PaperRecord,
+    prompts: SummaryPromptTemplates,
+    budget: TokenBudget,
+    provider: TrackedLlmProvider,
+    database_path: Path,
+    run_id: str,
+    call_log_dir: Path | None,
+    evidence_dir: Path,
+    summarization: SummarizationSettings,
+    progress: ProgressCallback | None,
+) -> StructuredSummary:
+    overhead = budget.estimate_tokens(prompts.evidence.render(schema=_evidence_schema(), chunk=""))
+    try:
+        chunks = build_chunks(
+            parsed,
+            max_input_tokens=summarization.chunk_max_input_tokens,
+            prompt_overhead_tokens=overhead,
+            overlap_paragraphs=summarization.chunk_overlap_paragraphs,
+            measure=budget.estimate_tokens,
+        )
+    except ValueError as exc:
+        raise SummaryError(str(exc)) from exc
+    if not chunks:
+        raise SummaryError("Parsed paper has no text sections")
+    items: list[EvidenceItem] = []
+    for chunk in chunks:
+        extracted = _chunk_evidence(
+            chunk,
+            len(chunks),
+            evidence_dir,
+            summarization.fact_max_output_tokens,
+            call_log_dir,
+            provider,
+            database_path,
+            run_id,
+            progress,
+            prompts.evidence,
+        )
+        items.extend(extracted.evidence)
+    merged = merge_evidence(items)
+    logger.info(
+        "evidence merged: chunks=%d extracted=%d merged=%d",
+        len(chunks),
+        len(items),
+        len(merged),
+    )
+    prompt = _summary_prompt(prompts.summary, paper, merged)
+    if not budget.fits(prompt, summarization.summary_max_output_tokens):
+        report_progress(progress, "Condensing evidence to fit the summary budget...")
+        merged = merge_evidence(
+            _condense_evidence(
+                merged,
+                prompts.reduce,
+                budget,
+                provider,
+                database_path,
+                run_id,
+                call_log_dir,
+                summarization.fact_max_output_tokens,
+            )
+        )
+        prompt = _summary_prompt(prompts.summary, paper, merged)
+        if not budget.fits(prompt, summarization.summary_max_output_tokens):
+            raise SummaryError(
+                "Condensed evidence still exceeds the summary context budget; "
+                "increase the providers.llm budget settings"
+            )
+    report_progress(progress, "Generating structured summary...")
+    raw_response = _generate(
+        provider,
+        prompt,
+        database_path,
+        run_id,
+        call_log_dir / "summary.json" if call_log_dir is not None else None,
+        "summary",
+        summarization.summary_max_output_tokens,
+        LlmStage.SUMMARY,
+    )
+    return _validate_or_repair(
+        raw_response.content,
+        provider,
+        database_path,
+        run_id,
+        call_log_dir,
+        summarization.summary_max_output_tokens,
+        progress,
+        prompts.repair,
+    )
+
+
+def _chunk_evidence(
+    chunk: PaperChunk,
+    total: int,
+    evidence_dir: Path,
     max_output_tokens: int,
     call_log_dir: Path | None,
     provider: TrackedLlmProvider,
@@ -198,52 +373,47 @@ def _section_facts(
     run_id: str,
     progress: ProgressCallback | None,
     prompt_template: PromptTemplate,
-) -> list[str]:
-    chunks = _chunks(parsed.sections, max_chunk_characters)
-    facts: list[str] = []
-    for index, chunk in enumerate(chunks, start=1):
-        digest = hashlib.sha256(f"{prompt_template.sha256}\0{chunk}".encode()).hexdigest()
-        path = facts_dir / f"section-{digest}.json"
-        if path.exists():
-            try:
-                cached = str(json.loads(path.read_text(encoding="utf-8"))["response"])
-                facts.append(ExtractedFacts.model_validate_json(cached).model_dump_json())
-                report_progress(progress, f"Reusing section facts {index}/{len(chunks)}.")
-                continue
-            except (OSError, KeyError, TypeError, ValueError, ValidationError):
-                pass
-        report_progress(progress, f"Summarizing section facts {index}/{len(chunks)}...")
-        response = _generate_facts(
-            provider,
-            _facts_prompt(prompt_template, chunk),
-            database_path,
-            run_id,
-            call_log_dir,
-            index,
-            len(chunks),
-            max_output_tokens,
-            progress,
-        )
+) -> ExtractedEvidence:
+    digest = hashlib.sha256(f"{prompt_template.sha256}\0{chunk.text}".encode()).hexdigest()
+    path = evidence_dir / f"chunk-{digest}.json"
+    if path.exists():
         try:
-            validated = ExtractedFacts.model_validate_json(response.content).model_dump_json()
-        except ValidationError as exc:
-            raise SummaryError(f"Extracted facts failed schema validation: {exc}") from exc
-        atomic_write_bytes(
-            path,
-            json.dumps(
-                {
-                    "prompt_version": SUMMARY_PROMPT_VERSION,
-                    "prompt_sha256": prompt_template.sha256,
-                    "response": validated,
-                }
-            ).encode(),
-            prefix="summary-",
-        )
-        facts.append(validated)
-    return facts
+            cached = str(json.loads(path.read_text(encoding="utf-8"))["response"])
+            report_progress(progress, f"Reusing chunk evidence {chunk.index}/{total}.")
+            return ExtractedEvidence.model_validate_json(cached)
+        except (OSError, KeyError, TypeError, ValueError, ValidationError):
+            pass
+    report_progress(progress, f"Extracting chunk evidence {chunk.index}/{total}...")
+    response = _generate_evidence(
+        provider,
+        prompt_template.render(schema=_evidence_schema(), chunk=chunk.text),
+        database_path,
+        run_id,
+        call_log_dir,
+        chunk.index,
+        total,
+        max_output_tokens,
+        progress,
+    )
+    try:
+        validated = ExtractedEvidence.model_validate_json(response.content)
+    except ValidationError as exc:
+        raise SummaryError(f"Extracted evidence failed schema validation: {exc}") from exc
+    atomic_write_bytes(
+        path,
+        json.dumps(
+            {
+                "prompt_version": SUMMARY_PROMPT_VERSION,
+                "prompt_sha256": prompt_template.sha256,
+                "response": validated.model_dump_json(),
+            }
+        ).encode(),
+        prefix="summary-",
+    )
+    return validated
 
 
-def _generate_facts(
+def _generate_evidence(
     provider: TrackedLlmProvider,
     prompt: str,
     database_path: Path,
@@ -258,20 +428,25 @@ def _generate_facts(
 ) -> LlmResponse:
     def request(attempt: int, attempt_tokens: int) -> LlmResponse:
         suffix = "" if attempt == 1 else f"-retry-{attempt}"
+        diagnostic = (
+            call_log_dir / f"evidence-{index:03d}{suffix}.json"
+            if call_log_dir is not None
+            else None
+        )
         return _generate(
             provider,
             prompt,
             database_path,
             run_id,
-            call_log_dir / f"facts-{index:03d}{suffix}.json" if call_log_dir is not None else None,
-            f"facts {index}/{total}{suffix.replace('-', ' ')}",
+            diagnostic,
+            f"evidence {index}/{total}{suffix.replace('-', ' ')}",
             attempt_tokens,
-            LlmStage.FACT,
+            LlmStage.EVIDENCE,
         )
 
     def is_valid(content: str) -> bool:
         try:
-            ExtractedFacts.model_validate_json(content)
+            ExtractedEvidence.model_validate_json(content)
         except ValidationError:
             return False
         return True
@@ -279,7 +454,7 @@ def _generate_facts(
     def on_retry(attempt_tokens: int) -> None:
         report_progress(
             progress,
-            f"Retrying section facts {index}/{total} with {attempt_tokens} output tokens "
+            f"Retrying chunk evidence {index}/{total} with {attempt_tokens} output tokens "
             "(previous response was truncated)...",
         )
 
@@ -289,6 +464,90 @@ def _generate_facts(
         is_valid=is_valid,
         max_attempts=max_attempts,
         on_retry=on_retry,
+    )
+
+
+def _condense_evidence(
+    items: list[EvidenceItem],
+    reduce_template: PromptTemplate,
+    budget: TokenBudget,
+    provider: TrackedLlmProvider,
+    database_path: Path,
+    run_id: str,
+    call_log_dir: Path | None,
+    max_output_tokens: int,
+) -> list[EvidenceItem]:
+    condensed: list[EvidenceItem] = []
+    for domain, group in group_by_domain(items).items():
+        condensed.extend(
+            _condense_group(
+                domain,
+                group,
+                reduce_template,
+                budget,
+                provider,
+                database_path,
+                run_id,
+                call_log_dir,
+                max_output_tokens,
+            )
+        )
+    return condensed
+
+
+def _condense_group(
+    domain: str,
+    group: list[EvidenceItem],
+    reduce_template: PromptTemplate,
+    budget: TokenBudget,
+    provider: TrackedLlmProvider,
+    database_path: Path,
+    run_id: str,
+    call_log_dir: Path | None,
+    max_output_tokens: int,
+) -> list[EvidenceItem]:
+    prompt = reduce_template.render(schema=_evidence_schema(), evidence=_evidence_json(group))
+    if budget.fits(prompt, max_output_tokens):
+        response = _generate(
+            provider,
+            prompt,
+            database_path,
+            run_id,
+            call_log_dir / f"reduce-{domain}.json" if call_log_dir is not None else None,
+            f"reduce {domain}",
+            max_output_tokens,
+            LlmStage.SUMMARY,
+        )
+        try:
+            return ExtractedEvidence.model_validate_json(response.content).evidence
+        except ValidationError:
+            logger.warning("evidence condense for domain %s failed validation; splitting", domain)
+    if len(group) == 1:
+        logger.warning(
+            "single evidence item exceeds the condense budget; keeping it unchanged",
+        )
+        return group
+    middle = len(group) // 2
+    return _condense_group(
+        domain,
+        group[:middle],
+        reduce_template,
+        budget,
+        provider,
+        database_path,
+        run_id,
+        call_log_dir,
+        max_output_tokens,
+    ) + _condense_group(
+        domain,
+        group[middle:],
+        reduce_template,
+        budget,
+        provider,
+        database_path,
+        run_id,
+        call_log_dir,
+        max_output_tokens,
     )
 
 
@@ -428,41 +687,46 @@ def _decode_json(raw: str) -> dict[str, Any]:
     return result
 
 
-def _chunks(sections: tuple[ParsedSection, ...], limit: int) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for section in sections:
-        text = (
-            f"Section: {section.title or 'Untitled'}\n"
-            f"Pages: {list(section.pages)}\n{section.text}\n"
-        )
-        while text:
-            available = limit - len(current)
-            if available <= 0:
-                chunks.append(current)
-                current = ""
-                available = limit
-            current += text[:available]
-            text = text[available:]
-    if current:
-        chunks.append(current)
-    if not chunks:
-        raise SummaryError("Parsed paper has no text sections")
-    return chunks
+def _serialize_paper(parsed: ParsedPaper) -> str:
+    parts = []
+    for section in parsed.sections:
+        title = (section.title or "Untitled").strip() or "Untitled"
+        text = section.text.strip()
+        if not text:
+            continue
+        parts.append(f"## {title}\nPages: {list(section.pages)}\n\n{text}")
+    return "\n\n".join(parts)
 
 
-def _facts_prompt(template: PromptTemplate, chunk: str) -> str:
+def _full_prompt(template: PromptTemplate, paper: PaperRecord, parsed: ParsedPaper) -> str:
     return template.render(
-        schema=json.dumps(ExtractedFacts.model_json_schema(), ensure_ascii=False),
-        chunk=chunk,
+        schema=json.dumps(StructuredSummary.model_json_schema(), ensure_ascii=False),
+        identity=_identity_json(paper),
+        paper=_serialize_paper(parsed),
     )
+
+
+def _evidence_schema() -> str:
+    return json.dumps(ExtractedEvidence.model_json_schema(), ensure_ascii=False)
+
+
+def _evidence_json(items: list[EvidenceItem]) -> str:
+    return json.dumps([item.model_dump(mode="json") for item in items], ensure_ascii=False)
 
 
 def _summary_prompt(
     template: PromptTemplate,
     paper: PaperRecord,
-    facts: list[str],
+    evidence: list[EvidenceItem],
 ) -> str:
+    return template.render(
+        schema=json.dumps(StructuredSummary.model_json_schema(), ensure_ascii=False),
+        identity=_identity_json(paper),
+        evidence=_evidence_json(evidence),
+    )
+
+
+def _identity_json(paper: PaperRecord) -> str:
     identity = {
         "title": paper.title,
         "authors": list(paper.authors),
@@ -471,11 +735,7 @@ def _summary_prompt(
         "doi": paper.doi,
         "arxiv_id": paper.arxiv_id,
     }
-    return template.render(
-        schema=json.dumps(StructuredSummary.model_json_schema(), ensure_ascii=False),
-        identity=json.dumps(identity, ensure_ascii=False),
-        facts=json.dumps([json.loads(fact) for fact in facts], ensure_ascii=False),
-    )
+    return json.dumps(identity, ensure_ascii=False)
 
 
 def _summary_identity(paper: PaperRecord) -> SummaryIdentity:

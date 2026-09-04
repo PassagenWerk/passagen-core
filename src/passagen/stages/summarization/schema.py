@@ -5,15 +5,61 @@ from pydantic import BaseModel, ConfigDict, Field
 SUMMARY_SCHEMA_VERSION: Literal["2"] = "2"
 
 
-class ExtractedFacts(BaseModel):
+EVIDENCE_CATEGORIES: tuple[str, ...] = (
+    "problem",
+    "motivation",
+    "goal",
+    "non_goal",
+    "assumption",
+    "prior_work_limitation",
+    "contribution",
+    "design_component",
+    "process",
+    "mechanism",
+    "implementation_detail",
+    "evaluation_setup",
+    "evaluation_result",
+    "ablation",
+    "limitation",
+    "tradeoff",
+    "threat_to_validity",
+    "conclusion",
+    "related_work_distinction",
+)
+
+
+class EvidenceItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    facts: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Evidence-backed English facts with source page numbers when known; preserve metric "
-            "ownership, comparison direction, units, and conditions."
-        ),
+    category: str = Field(
+        description=f"One of: {', '.join(EVIDENCE_CATEGORIES)}.",
     )
+    claim: str = Field(description="Concise evidence-backed English statement.")
+    section: str | None = Field(
+        default=None, description="Section title or path the claim comes from."
+    )
+    evidence_pages: list[int] = Field(default_factory=list)
+    subject: str | None = Field(
+        default=None, description="Evaluated subject for quantitative results."
+    )
+    subject_value: str | None = Field(
+        default=None, description="Measured value belonging to the subject."
+    )
+    baseline: str | None = None
+    baseline_value: str | None = Field(
+        default=None, description="Measured value belonging to the named baseline."
+    )
+    conditions: list[str] = Field(
+        default_factory=list,
+        description="Workload, dataset, configuration, or other measurement conditions.",
+    )
+    source_excerpt: str | None = Field(
+        default=None, description="Short quote from the source supporting the claim."
+    )
+
+
+class ExtractedEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence: list[EvidenceItem] = Field(default_factory=list)
 
 
 class SummaryIdentity(BaseModel):

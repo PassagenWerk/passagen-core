@@ -281,7 +281,12 @@ related_work:
 
 `identity` 保存在 Summary artifact 中，但最终值由数据库中的 PaperRecord 覆盖，LLM 不具有修改 title、authors、year、venue、DOI 或 arXiv ID 的权限。Schema v2 是不兼容变更，v1 Summary 和基于它生成的 Outline 必须使用 `update <paper-id> --force` 重建。
 
-正文超过模型上下文限制时，先按章节切分并生成中间事实摘要，再合并为最终结构化摘要。中间结果应保留，失败重试时不重复处理成功分块。
+Summary 生成支持 `auto`、`full` 和 `hierarchical` 三种策略。请求发送前用全局 LLM 预算
+（context window × 利用率 − 安全余量 − 输出预留）评估完整全文 prompt：可容纳时直接根据
+全文序列化生成结构化摘要；超出预算时按章节、段落和句子边界语义切块，为每块提取带类别、
+章节、页码和定量归属的结构化 evidence，合并去重后再生成最终摘要。evidence 总量超过最终
+预算时按 Summary 领域分组中间归并，不做尾部截断。中间结果应保留，失败重试时不重复处理
+成功分块。
 
 ## Schema 校验和修复
 
@@ -370,6 +375,10 @@ providers:
     model: gpt-4o-mini
     api_key_env: PASSAGEN_API_KEY
     timeout_seconds: 120
+    context_window_tokens: 128000
+    max_context_utilization: 0.65
+    safety_margin_tokens: 8000
+    chars_per_token: 4.0
 pipeline:
   metadata:
     first_pages: 2
@@ -377,10 +386,17 @@ pipeline:
     parser: auto
     min_text_characters: 10
   summarization:
-    max_chunk_characters: 12000
+    strategy: auto
+    chunk_max_input_tokens: 24000
+    chunk_overlap_paragraphs: 1
     fact_max_output_tokens: 1500
     summary_max_output_tokens: 3000
 ```
+
+与模型能力相关的全局 LLM 调用参数（上下文窗口、利用率、安全余量、token 估算系数）
+归入 `providers.llm`，供所有 LLM 调用共享；`pipeline` 各阶段只保留自身的策略参数。
+token 估算按 `len(text) / chars_per_token` 计算，不引入 tokenizer 依赖，估算误差由安全
+余量吸收。
 
 执行需要 GROBID 的 metadata fallback 或 `auto`/`grobid` 解析前，Passagen 会检查服务健康状态。执行摘要前会检查 LLM API key 配置；不执行对应阶段时不检查这些依赖。缺少必需依赖时该阶段以明确错误失败。
 

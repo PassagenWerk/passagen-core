@@ -34,8 +34,10 @@ class PromptTemplate:
 
 @dataclass(frozen=True, slots=True)
 class SummaryPromptTemplates:
-    facts: PromptTemplate
+    evidence: PromptTemplate
     summary: PromptTemplate
+    full: PromptTemplate
+    reduce: PromptTemplate
     repair: PromptTemplate
 
 
@@ -43,13 +45,25 @@ def load_summary_prompt_templates(
     facts_path: Path | None,
     summary_path: Path | None,
     repair_path: Path | None,
+    full_path: Path | None = None,
+    reduce_path: Path | None = None,
 ) -> SummaryPromptTemplates:
     return SummaryPromptTemplates(
-        facts=load_prompt_template("facts-v2.txt", facts_path, variables={"schema", "chunk"}),
+        evidence=load_prompt_template("evidence-v3.txt", facts_path, variables={"schema", "chunk"}),
         summary=load_prompt_template(
-            "summary-v2.txt",
+            "summary-v3.txt",
             summary_path,
-            variables={"schema", "identity", "facts"},
+            variables={"schema", "identity", "evidence"},
+        ),
+        full=load_prompt_template(
+            "summary-full-v3.txt",
+            full_path,
+            variables={"schema", "identity", "paper"},
+        ),
+        reduce=load_prompt_template(
+            "reduce-v3.txt",
+            reduce_path,
+            variables={"schema", "evidence"},
         ),
         repair=load_prompt_template(
             "repair-v2.txt",

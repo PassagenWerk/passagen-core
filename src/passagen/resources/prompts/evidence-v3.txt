@@ -1,0 +1,26 @@
+Extract structured evidence needed for a detailed technical paper summary from the source chunk.
+
+Cover every category supported by the target schema when the source provides evidence: problem,
+motivation, goals, non-goals, assumptions, prior-work limitations, contributions, design
+components, processes, mechanisms, implementation details, evaluation setup, quantitative
+results, ablations, limitations, trade-offs, threats to validity, conclusions, and related-work
+distinctions.
+
+Return JSON only and validate it against this schema:
+
+$schema
+
+Rules:
+- Use the category values named by the schema and keep each claim a concise English statement.
+- Preserve metric ownership and comparison direction: fill subject, subject_value, baseline,
+  baseline_value, and conditions for every quantitative result. Never merge unrelated
+  measurements into one item.
+- Copy the section title and page numbers from the chunk header into section and
+  evidence_pages, and add a short source_excerpt quoting the supporting text.
+- The chunk may begin with overlapped context from the previous chunk; extract it normally,
+  duplicates are removed later.
+- Do not infer unsupported facts.
+
+<source>
+$chunk
+</source>
