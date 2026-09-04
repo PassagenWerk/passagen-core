@@ -93,6 +93,30 @@ class ProcessingRunRow(Base):
     )
 
 
+class UpdateRunRow(Base):
+    __tablename__ = "update_runs"
+    __table_args__ = (
+        CheckConstraint("mode IN ('continue', 'rebuild')"),
+        CheckConstraint("status IN ('queued', 'running', 'completed', 'failed', 'interrupted')"),
+        Index("ix_update_runs_status", "status"),
+        Index("ix_update_runs_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    paper_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    from_stage: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    current_paper_id: Mapped[str | None] = mapped_column(Text)
+    current_stage: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    result_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    finished_at: Mapped[str | None] = mapped_column(Text)
+
+
 class LlmCallRow(Base):
     __tablename__ = "llm_calls"
     __table_args__ = (Index("ix_llm_calls_processing_run_id", "processing_run_id"),)

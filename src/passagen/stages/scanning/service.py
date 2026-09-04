@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -114,6 +115,56 @@ def scan_directory(
     report_progress(
         progress,
         f"Scan complete: {len(result.imported)} imported, "
+        f"{len(result.skipped)} skipped, {len(result.failures)} failed.",
+    )
+    return result
+
+
+def import_files(
+    paths: Sequence[Path],
+    *,
+    data_dir: Path,
+    database_path: Path,
+    progress: ProgressCallback | None = None,
+) -> ScanResult:
+    """Import explicit PDF files (e.g. browser uploads) with SHA-256 deduplication.
+
+    Unlike :func:`scan_directory` there is no discovery step; each given file is
+    validated and imported independently so one bad file never aborts the batch.
+    """
+    managed_root = data_dir.expanduser().resolve()
+    logger.info("import started: files=%s managed_root=%s", len(paths), managed_root)
+    initialize_database(database_path)
+    result = ScanResult()
+    total = len(paths)
+    for index, source_path in enumerate(paths, start=1):
+        report_progress(progress, f"Importing PDF {index}/{total}: {source_path.name}")
+        try:
+            record, created = _import_pdf(source_path, managed_root, database_path)
+        except InvalidPdfError as exc:
+            logger.error("import failed: file=%s error=%s", source_path, exc)
+            result.failures.append(ScanFailure(source_path, str(exc), code="not_a_pdf"))
+            continue
+        except (OSError, RuntimeError, sqlite3.Error, SQLAlchemyError) as exc:
+            logger.error("import failed: file=%s error=%s", source_path, exc)
+            result.failures.append(ScanFailure(source_path, str(exc)))
+            continue
+        (result.imported if created else result.skipped).append(record)
+        logger.info(
+            "import finished: file=%s paper_id=%s created=%s",
+            source_path,
+            record.id,
+            created,
+        )
+    logger.info(
+        "import finished: imported=%s skipped=%s failed=%s",
+        len(result.imported),
+        len(result.skipped),
+        len(result.failures),
+    )
+    report_progress(
+        progress,
+        f"Import complete: {len(result.imported)} imported, "
         f"{len(result.skipped)} skipped, {len(result.failures)} failed.",
     )
     return result

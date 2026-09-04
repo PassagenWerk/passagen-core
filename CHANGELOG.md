@@ -6,6 +6,19 @@ All notable changes to Passagen Core are documented in this file.
 
 ### Added
 
+- `passagen.processing`: adapter-independent `ProcessingService` with a persisted
+  `ProcessingRun`/`ProgressEvent` contract (new `update_runs` table, schema version 3),
+  per-paper conflict detection, restart interruption recovery, structured progress events under
+  `data/runs/<run-id>/events.jsonl`, and a per-run configuration snapshot in
+  `data/runs/<run-id>/run.json`.
+- `update_papers` now accepts an explicit `paper_ids` selection, a `from_stage` rebuild point
+  (`metadata`, `parse`, `summary`), structured `UpdateEvent` callbacks, and records a stable
+  failure category per failed paper.
+- `passagen.stages.scanning.import_files` imports explicit PDF files (e.g. browser uploads) with
+  the same content-addressed deduplication as directory scans, isolating per-file failures with a
+  stable reason code.
+- `load_settings()` resolves relative prompt paths against the config file directory and exposes
+  `resolve_config_path()` so adapters can log the configuration actually in use.
 - Context-budgeted summarization with `auto`, `full`, and `hierarchical` strategies: papers that
   fit the configured context budget are summarized directly from the full serialized text, while
   longer papers fall back to semantic chunking and hierarchical evidence reduction.

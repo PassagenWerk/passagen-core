@@ -248,8 +248,7 @@ class PaperDiscoveryProvider(Protocol):
         self,
         venue: str,
         year: int,
-    ) -> list[PaperMetadata]:
-        ...
+    ) -> list[PaperMetadata]: ...
 ```
 
 按 `architecture.md` 的依赖方向落位：
@@ -339,8 +338,7 @@ class MetadataEnricher(Protocol):
     def enrich(
         self,
         paper: PaperMetadata,
-    ) -> PaperMetadata:
-        ...
+    ) -> PaperMetadata: ...
 ```
 
 匹配优先：
@@ -666,11 +664,7 @@ passagen screen import-review review.csv
 最终 decision：
 
 ```python
-effective_decision = (
-    human_decision
-    if human_decision is not None
-    else llm_decision
-)
+effective_decision = human_decision if human_decision is not None else llm_decision
 ```
 
 ## 后续增强

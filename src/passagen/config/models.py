@@ -175,13 +175,16 @@ def load_settings(
     cli_overrides = {key: value for key, value in (overrides or {}).items() if value is not None}
     data_dir = Path(cli_overrides.get("data_dir") or DEFAULT_DATA_DIR).expanduser()
 
-    path = _resolve_config_path(config_path, data_dir)
+    path = resolve_config_path(config_path, data_dir)
     values = _read_config(path) if path is not None else {}
 
     if "data_dir" in values:
         raise ConfigError(
             f"Config {path} must not set 'data_dir'; use the --data-dir command line option instead"
         )
+
+    if path is not None:
+        _resolve_relative_paths(values, path.expanduser().parent)
 
     _remove_environment_overrides(values)
     values.update(cli_overrides)
@@ -194,7 +197,12 @@ def load_settings(
         raise ConfigError(str(exc)) from exc
 
 
-def _resolve_config_path(config_path: Path | None, data_dir: Path) -> Path | None:
+def resolve_config_path(config_path: Path | None, data_dir: Path) -> Path | None:
+    """Return the config file in effect: explicit path or ``<data_dir>/passagen.yaml``.
+
+    A config at the legacy ``./passagen.yaml`` location is rejected with a
+    migration hint so the data directory stays the single canonical location.
+    """
     if config_path is not None:
         return config_path.expanduser()
 
@@ -240,6 +248,34 @@ def _read_config(path: Path) -> dict[str, Any]:
     if "pipeline" in document:
         values["pipeline"] = document["pipeline"]
     return values
+
+
+def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
+    """Resolve relative prompt paths against the config file directory."""
+    pipeline = values.get("pipeline")
+    if not isinstance(pipeline, dict):
+        return
+    prompt_keys = (
+        (
+            "summarization",
+            (
+                "facts_prompt_path",
+                "summary_prompt_path",
+                "full_prompt_path",
+                "reduce_prompt_path",
+                "repair_prompt_path",
+            ),
+        ),
+        ("outlining", ("prompt_path",)),
+    )
+    for section, keys in prompt_keys:
+        section_values = pipeline.get(section)
+        if not isinstance(section_values, dict):
+            continue
+        for key in keys:
+            value = section_values.get(key)
+            if isinstance(value, str) and value and not Path(value).is_absolute():
+                section_values[key] = str(base_dir / value)
 
 
 def _remove_environment_overrides(values: dict[str, Any]) -> None:

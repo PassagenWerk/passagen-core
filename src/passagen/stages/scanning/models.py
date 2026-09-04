@@ -16,6 +16,7 @@ class InvalidPdfError(ValueError):
 class ScanFailure:
     path: Path
     message: str
+    code: str = "import_failed"
 
 
 @dataclass(slots=True)

@@ -4,12 +4,13 @@ from passagen.stages.scanning.models import (
     ScanFailure,
     ScanResult,
 )
-from passagen.stages.scanning.service import scan_directory
+from passagen.stages.scanning.service import import_files, scan_directory
 
 __all__ = [
     "InvalidPdfError",
     "ScanDirectoryError",
     "ScanFailure",
     "ScanResult",
+    "import_files",
     "scan_directory",
 ]

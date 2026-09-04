@@ -18,6 +18,7 @@ from passagen.config.models import (
     SummarizationSettings,
     SummarizationStrategy,
     load_settings,
+    resolve_config_path,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "SummarizationSettings",
     "SummarizationStrategy",
     "load_settings",
+    "resolve_config_path",
 ]

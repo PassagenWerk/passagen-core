@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
@@ -14,9 +15,13 @@ from passagen.stages.progress import ProgressCallback, report_progress
 from passagen.stages.summarization import SummaryError, summarize_paper
 from passagen.stages.updating.models import (
     LATEST_IMPLEMENTED_STATUS,
+    STATUS_ORDER,
+    UpdateEvent,
+    UpdateEventCallback,
     UpdateFailure,
     UpdateResult,
     UpdateTargetError,
+    rebuild_stage_index,
 )
 from passagen.storage.repository import PaperRecord, get_paper, list_papers
 
@@ -26,6 +31,12 @@ _UPDATE_PENDING_STATUSES = {
     PaperStatus.PARSED,
     PaperStatus.SUMMARIZED,
 }
+_FAILURE_CATEGORIES: tuple[tuple[type[Exception], str], ...] = (
+    (MetadataResolutionError, "metadata"),
+    (PaperParsingError, "parsing"),
+    (SummaryError, "summarization"),
+    (OutlineError, "outlining"),
+)
 logger = logging.getLogger(__name__)
 
 
@@ -36,28 +47,42 @@ def update_papers(
     pipeline: PipelineSettings,
     paper_id: str | None = None,
     *,
+    paper_ids: Sequence[str] | None = None,
+    from_stage: str | None = None,
     summary_provider: LlmProvider | None = None,
     outline_provider: LlmProvider | None = None,
     provider_health: ProviderHealthSnapshot | None = None,
     execution_log_dir: Path | None = None,
     force: bool = False,
     progress: ProgressCallback | None = None,
+    on_event: UpdateEventCallback | None = None,
     llm_stats: LlmCallStats | None = None,
 ) -> UpdateResult:
-    papers = _select_papers(database_path, paper_id)
+    if from_stage is None and force:
+        from_stage = "metadata"
+    rebuild_from = rebuild_stage_index(from_stage) if from_stage is not None else None
+    papers = _select_papers(database_path, paper_id, paper_ids)
     target_status = LATEST_IMPLEMENTED_STATUS
     logger.info(
-        "update started: target=%s force=%s selected=%s latest_status=%s",
-        paper_id or "all",
-        force,
+        "update started: target=%s from_stage=%s selected=%s latest_status=%s",
+        paper_id or (f"{len(paper_ids)} ids" if paper_ids is not None else "all"),
+        from_stage or "continue",
         len(papers),
         target_status.value,
     )
-    report_progress(progress, f"Selected {len(papers)} paper(s) for update.")
+    _emit(
+        on_event,
+        progress,
+        None,
+        "update",
+        0,
+        len(papers),
+        f"Selected {len(papers)} paper(s) for update.",
+    )
     result = UpdateResult(target_status=target_status)
     total = len(papers)
     for index, paper in enumerate(papers, start=1):
-        if not force and paper.status not in _UPDATE_PENDING_STATUSES:
+        if rebuild_from is None and paper.status not in _UPDATE_PENDING_STATUSES:
             logger.info(
                 "update skipped: paper_id=%s status=%s reason=already_at_or_beyond_target",
                 paper.id,
@@ -66,6 +91,7 @@ def update_papers(
             result.skipped.append(paper)
             _report_paper_progress(
                 progress,
+                on_event,
                 index,
                 total,
                 paper,
@@ -79,16 +105,17 @@ def update_papers(
             paper.status.value,
             paper.original_filename,
         )
-        _report_paper_progress(progress, index, total, paper, "selection", "starting update.")
+        _report_paper_progress(
+            progress, on_event, index, total, paper, "selection", "starting update."
+        )
         try:
             current = paper
             warnings: list[str] = []
-            needs_metadata = force or current.status is PaperStatus.DISCOVERED
-            needs_parsing = (
-                force or needs_metadata or current.status is PaperStatus.METADATA_RESOLVED
-            )
-            needs_summary = force or needs_parsing or current.status is PaperStatus.PARSED
-            needs_outline = force or needs_summary or current.status is PaperStatus.SUMMARIZED
+            status_index = STATUS_ORDER.index(current.status)
+            needs_metadata = status_index < 1 or rebuild_from == 1
+            needs_parsing = status_index < 2 or (rebuild_from is not None and rebuild_from <= 2)
+            needs_summary = status_index < 3 or (rebuild_from is not None and rebuild_from <= 3)
+            needs_outline = status_index < 4 or rebuild_from is not None
             stage_total = (
                 int(needs_metadata) + int(needs_parsing) + int(needs_summary) + int(needs_outline)
             )
@@ -98,6 +125,7 @@ def update_papers(
                 logger.info("update stage started: paper_id=%s stage=metadata", paper.id)
                 _report_paper_progress(
                     progress,
+                    on_event,
                     index,
                     total,
                     paper,
@@ -113,10 +141,11 @@ def update_papers(
                     pipeline.metadata,
                     providers,
                     provider_health=provider_health,
-                    force=force,
+                    force=rebuild_from == 1,
                     progress=partial(
                         _report_paper_progress,
                         progress,
+                        on_event,
                         index,
                         total,
                         paper,
@@ -133,6 +162,7 @@ def update_papers(
                 logger.info("update stage started: paper_id=%s stage=full_text", paper.id)
                 _report_paper_progress(
                     progress,
+                    on_event,
                     index,
                     total,
                     paper,
@@ -148,10 +178,11 @@ def update_papers(
                     pipeline.parsing,
                     providers.grobid,
                     provider_health=provider_health,
-                    force=force,
+                    force=rebuild_from is not None and rebuild_from <= 2,
                     progress=partial(
                         _report_paper_progress,
                         progress,
+                        on_event,
                         index,
                         total,
                         paper,
@@ -168,6 +199,7 @@ def update_papers(
                 logger.info("update stage started: paper_id=%s stage=summarize", paper.id)
                 _report_paper_progress(
                     progress,
+                    on_event,
                     index,
                     total,
                     paper,
@@ -184,11 +216,12 @@ def update_papers(
                     pipeline.summarization,
                     provider_health=provider_health,
                     execution_log_dir=execution_log_dir,
-                    force=force,
+                    force=rebuild_from is not None and rebuild_from <= 3,
                     provider=summary_provider,
                     progress=partial(
                         _report_paper_progress,
                         progress,
+                        on_event,
                         index,
                         total,
                         paper,
@@ -205,6 +238,7 @@ def update_papers(
                 logger.info("update stage started: paper_id=%s stage=outline", paper.id)
                 _report_paper_progress(
                     progress,
+                    on_event,
                     index,
                     total,
                     paper,
@@ -221,11 +255,12 @@ def update_papers(
                     pipeline.outlining,
                     provider_health=provider_health,
                     execution_log_dir=execution_log_dir,
-                    force=force,
+                    force=rebuild_from is not None,
                     provider=outline_provider or summary_provider,
                     progress=partial(
                         _report_paper_progress,
                         progress,
+                        on_event,
                         index,
                         total,
                         paper,
@@ -239,9 +274,11 @@ def update_papers(
                 logger.info("update stage finished: paper_id=%s stage=outline", paper.id)
         except (MetadataResolutionError, PaperParsingError, SummaryError, OutlineError) as exc:
             logger.error("update paper failed: paper_id=%s error=%s", paper.id, exc)
-            result.failures.append(UpdateFailure(paper.id, str(exc)))
+            result.failures.append(
+                UpdateFailure(paper.id, str(exc), category=_failure_category(exc))
+            )
             _report_paper_progress(
-                progress, index, total, paper, "failed", "update failed; continuing."
+                progress, on_event, index, total, paper, "failed", "update failed; continuing."
             )
             continue
         if needs_metadata or needs_parsing or needs_summary or needs_outline:
@@ -252,7 +289,7 @@ def update_papers(
                 current.status.value,
                 current.title,
             )
-            _report_paper_progress(progress, index, total, paper, "complete", "updated.")
+            _report_paper_progress(progress, on_event, index, total, paper, "complete", "updated.")
         else:
             result.skipped.append(current)
             logger.info("update paper skipped by stage: paper_id=%s", paper.id)
@@ -266,16 +303,43 @@ def update_papers(
         len(result.warnings),
         len(result.failures),
     )
-    report_progress(
+    _emit(
+        on_event,
         progress,
+        None,
+        "update",
+        total,
+        total,
         f"Update complete: {len(result.updated)} updated, "
         f"{len(result.skipped)} skipped, {len(result.failures)} failed.",
     )
     return result
 
 
+def _failure_category(exc: Exception) -> str:
+    for error_type, category in _FAILURE_CATEGORIES:
+        if isinstance(exc, error_type):
+            return category
+    return "processing"
+
+
+def _emit(
+    on_event: UpdateEventCallback | None,
+    progress: ProgressCallback | None,
+    paper_id: str | None,
+    stage: str,
+    current: int,
+    total: int,
+    message: str,
+) -> None:
+    report_progress(progress, message)
+    if on_event is not None:
+        on_event(UpdateEvent(paper_id, stage, current, total, message))
+
+
 def _report_paper_progress(
     progress: ProgressCallback | None,
+    on_event: UpdateEventCallback | None,
     index: int,
     total: int,
     paper: PaperRecord,
@@ -290,14 +354,31 @@ def _report_paper_progress(
         if stage_number is not None and stage_total is not None
         else stage
     )
-    report_progress(
+    _emit(
+        on_event,
         progress,
+        paper.id,
+        stage,
+        index,
+        total,
         f"Paper {index}/{total} [{stage_label}]: "
         f"{paper.title or paper.original_filename}: {message}",
     )
 
 
-def _select_papers(database_path: Path, paper_id: str | None) -> list[PaperRecord]:
+def _select_papers(
+    database_path: Path,
+    paper_id: str | None,
+    paper_ids: Sequence[str] | None,
+) -> list[PaperRecord]:
+    if paper_ids is not None:
+        papers = []
+        for selected_id in dict.fromkeys(paper_ids):
+            paper = get_paper(database_path, selected_id)
+            if paper is None:
+                raise UpdateTargetError(f"Paper not found: {selected_id}")
+            papers.append(paper)
+        return papers
     if paper_id is None:
         return list_papers(database_path)
     paper = get_paper(database_path, paper_id)

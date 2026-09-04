@@ -177,3 +177,23 @@ def test_rejects_invalid_yaml(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="Cannot read config"):
         load_settings(config_path)
+
+
+def test_resolves_relative_prompt_paths_against_config_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / CONFIG_FILENAME).write_text(
+        "pipeline:\n"
+        "  summarization:\n"
+        "    facts_prompt_path: prompts/facts.txt\n"
+        "  outlining:\n"
+        "    prompt_path: /absolute/outline.txt\n"
+    )
+
+    settings = load_settings()
+
+    assert settings.pipeline.summarization.facts_prompt_path == Path("data/prompts/facts.txt")
+    assert settings.pipeline.outlining.prompt_path == Path("/absolute/outline.txt")

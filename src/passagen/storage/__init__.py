@@ -8,6 +8,7 @@ from passagen.storage.models import (
     PaperTagRow,
     ProcessingRunRow,
     TagRow,
+    UpdateRunRow,
 )
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "PaperTagRow",
     "ProcessingRunRow",
     "TagRow",
+    "UpdateRunRow",
     "database_engine",
     "session_scope",
 ]

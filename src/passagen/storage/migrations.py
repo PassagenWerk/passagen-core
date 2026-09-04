@@ -8,7 +8,7 @@ from sqlalchemy import Connection, inspect
 
 from passagen.storage.engine import database_engine
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _BASELINE_REVISION = "0001"
 _APPLICATION_TABLES = {"papers", "artifacts", "processing_runs", "llm_calls"}
 _REQUIRED_COLUMNS = {
