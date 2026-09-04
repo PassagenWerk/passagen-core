@@ -4,6 +4,13 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-04
+
+### Fixed
+
+- Excluded the repository-local uv cache from source distributions so tagged CI builds do not
+  package virtual-environment symlinks.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added
