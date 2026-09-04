@@ -339,14 +339,16 @@ providers:
 Passagen 默认把配置和所有受管理数据限制在启动命令时的当前工作目录：
 
 ```text
-./passagen.yaml
 ./data/
+  passagen.yaml
+  ...
 ```
 
-- 仓库提供不含隐私信息的 `passagen.example.yaml` 模板；本地 `passagen.yaml` 不受 Git 跟踪，文件不存在或内容为空时仍可使用内置默认值和环境变量。
+- 配置文件位于数据目录内（`<data_dir>/passagen.yaml`，默认 `./data/passagen.yaml`），使配置与数据构成自包含的库；仓库提供不含隐私信息的 `passagen.example.yaml` 模板，本地配置不受 Git 跟踪，文件不存在或内容为空时仍可使用内置默认值和环境变量。
 - `data/` 保存数据库、受管理 PDF 和生成产物。
+- `data_dir` 只能由 `--data-dir` 命令行参数指定；配置文件或 `PASSAGEN_DATA_DIR` 环境变量设置 `data_dir` 会被拒绝。
 - 默认运行不会读取或创建 `~/.config/passagen`、`~/.local/share/passagen` 等用户级目录。
-- `--config`、`--data-dir`、`PASSAGEN_DATA_DIR` 等显式覆盖仍然有效。
+- `--config`、`--data-dir` 等显式覆盖仍然有效。
 - 相对覆盖路径以执行命令时的当前工作目录为基准。
 - API key 继续只从指定环境变量读取，不写入 `passagen.yaml`。
 
@@ -354,7 +356,6 @@ Passagen 默认把配置和所有受管理数据限制在启动命令时的当�
 
 ```yaml
 passagen:
-  data_dir: data
   database_path: null
   debug: false
 providers:

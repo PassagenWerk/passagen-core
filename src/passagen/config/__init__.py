@@ -1,6 +1,8 @@
 from passagen.config.models import (
-    DEFAULT_CONFIG_PATH,
+    CONFIG_FILENAME,
+    DEFAULT_DATA_DIR,
     ENV_PREFIX,
+    LEGACY_CONFIG_PATH,
     ArxivSettings,
     ConfigError,
     CrossrefSettings,
@@ -19,8 +21,10 @@ from passagen.config.models import (
 )
 
 __all__ = [
-    "DEFAULT_CONFIG_PATH",
+    "CONFIG_FILENAME",
+    "DEFAULT_DATA_DIR",
     "ENV_PREFIX",
+    "LEGACY_CONFIG_PATH",
     "ArxivSettings",
     "ConfigError",
     "CrossrefSettings",

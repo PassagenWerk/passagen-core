@@ -2,33 +2,48 @@ from pathlib import Path
 
 import pytest
 
-from passagen.config import DEFAULT_CONFIG_PATH, ConfigError, load_settings
+from passagen.config import CONFIG_FILENAME, ConfigError, load_settings
 
 
-def test_defaults_to_current_working_directory(
+def test_reads_config_from_default_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / DEFAULT_CONFIG_PATH).write_text("passagen:\n  debug: true\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / CONFIG_FILENAME).write_text("passagen:\n  debug: true\n")
 
     settings = load_settings()
 
     assert settings.debug is True
-    assert settings.resolved_data_dir == tmp_path / "data"
-    assert settings.resolved_database_path == tmp_path / "data" / "passagen.db"
+    assert settings.resolved_data_dir == data_dir
+    assert settings.resolved_database_path == data_dir / "passagen.db"
+
+
+def test_reads_config_from_data_dir_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "library"
+    data_dir.mkdir()
+    (data_dir / CONFIG_FILENAME).write_text("passagen:\n  debug: true\n")
+
+    settings = load_settings(None, {"data_dir": data_dir})
+
+    assert settings.debug is True
+    assert settings.resolved_data_dir == data_dir
 
 
 def test_loads_yaml_and_environment_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("passagen:\n  data_dir: /from/file\n  debug: false\n")
-    monkeypatch.setenv("PASSAGEN_DATA_DIR", "/from/environment")
+    config_path.write_text("passagen:\n  debug: false\n")
+    monkeypatch.setenv("PASSAGEN_DEBUG", "true")
 
     settings = load_settings(config_path)
 
-    assert settings.data_dir == Path("/from/environment")
-    assert settings.debug is False
+    assert settings.debug is True
 
 
 def test_loads_layered_providers_pipeline_config_and_nested_environment_override(
@@ -74,14 +89,51 @@ pipeline:
     assert settings.pipeline.outlining.max_output_tokens == 4000
 
 
-def test_cli_override_has_highest_priority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("passagen:\n  data_dir: /from/file\n")
-    monkeypatch.setenv("PASSAGEN_DATA_DIR", "/from/environment")
+def test_data_dir_comes_from_command_line_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
 
-    settings = load_settings(config_path, {"data_dir": Path("/from/cli")})
+    settings = load_settings(None, {"data_dir": Path("/from/cli")})
 
     assert settings.data_dir == Path("/from/cli")
+
+
+def test_rejects_data_dir_in_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("passagen:\n  data_dir: /from/file\n")
+
+    with pytest.raises(ConfigError, match="must not set 'data_dir'"):
+        load_settings(config_path)
+
+
+def test_rejects_data_dir_environment_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PASSAGEN_DATA_DIR", "/from/environment")
+
+    with pytest.raises(ConfigError, match="PASSAGEN_DATA_DIR"):
+        load_settings()
+
+
+def test_rejects_config_in_both_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / CONFIG_FILENAME).write_text("passagen: {}\n")
+    (tmp_path / CONFIG_FILENAME).write_text("passagen: {}\n")
+
+    with pytest.raises(ConfigError, match="both"):
+        load_settings()
+
+
+def test_rejects_legacy_config_location(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / CONFIG_FILENAME).write_text("passagen:\n  debug: true\n")
+
+    with pytest.raises(ConfigError, match="has moved"):
+        load_settings()
 
 
 def test_rejects_unknown_config_field(tmp_path: Path) -> None:
@@ -98,6 +150,15 @@ def test_rejects_non_mapping_yaml(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="must contain a mapping"):
         load_settings(config_path)
+
+
+def test_missing_config_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings()
+
+    assert settings.data_dir == Path("data")
+    assert settings.debug is False
 
 
 def test_empty_yaml_uses_defaults(tmp_path: Path) -> None:

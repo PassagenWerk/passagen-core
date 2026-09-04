@@ -14,6 +14,7 @@ research 能力。
 | 编写、测试和检查共享 Python 代码 | [`code-style.md`](code-style.md) |
 | Summary 上下文预算和语义切块改进 | [`roadmap-context-improving.md`](roadmap-context-improving.md) |
 | Collection 综述、研究和对话探索 | [`roadmap-collection-research-and-exploration.md`](roadmap-collection-research-and-exploration.md) |
+| 会议论文发现与筛选 | [`roadmap-discovery-and-screening.md`](roadmap-discovery-and-screening.md) |
 | Core 拆分决策和迁移记录 | [`history/roadmap-core-split.md`](history/roadmap-core-split.md) |
 
 ## Related Adapters

@@ -61,7 +61,7 @@
 - 使用 `uv` 初始化 Python 项目和锁文件。
 - 建立 `src/passagen` 包、CLI 入口和测试目录。
 - 实现配置加载，支持配置文件、环境变量和命令行覆盖。
-- 默认从当前工作目录读取不受 Git 跟踪的分区式 `passagen.yaml`，仓库提供 `passagen.example.yaml` 模板，并将数据库和 artifact 写入当前目录的 `data/`。
+- 默认将不受 Git 跟踪的分区式 `passagen.yaml` 放在数据目录内（`<data_dir>/passagen.yaml`，默认 `./data/passagen.yaml`），仓库提供 `passagen.example.yaml` 模板，数据库和 artifact 同样写入 `data/`；`data_dir` 只能由 `--data-dir` 命令行参数指定。
 - 建立统一日志和用户可读错误输出。
 - 配置格式化、静态检查和测试命令。
 

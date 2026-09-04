@@ -25,7 +25,7 @@
 
 底层 parser、metadata adapter、repository 和领域模型在职责仍然紧凑时保持为模块；应用编排集中在 `stages/`，CLI 只负责组合依赖与呈现结果。不要为了匹配远期目标目录预先创建空包。
 
-默认运行边界是命令启动时的当前工作目录：配置从 `./passagen.yaml` 读取，受管理状态写入 `./data/`。用户 Home 目录不属于隐式配置或持久化来源；只有调用方显式传入的绝对路径可以把数据放到当前目录之外。
+默认运行边界是命令启动时的当前工作目录：配置从 `./data/passagen.yaml`（即 `<data_dir>/passagen.yaml`）读取，受管理状态写入 `./data/`。`data_dir` 只能由 `--data-dir` 命令行参数指定。用户 Home 目录不属于隐式配置或持久化来源；只有调用方显式传入的绝对路径可以把数据放到当前目录之外。
 
 ## 系统职责
 
@@ -148,7 +148,7 @@ Pipeline 不应把所有中间对象堆成一个不断扩张的 context 字段�
 ## 持久化与事务
 
 - `storage.repository` 负责 ORM 查询和领域读取模型转换，领域层不操作 Session 或拼接 SQL。
-- 默认配置路径和 `data_dir` 以当前工作目录为根；不得在 adapter 内回退到用户 Home 目录。
+- 默认 `data_dir` 以当前工作目录为根，且只能由 `--data-dir` 命令行参数指定；配置文件位于 `<data_dir>/passagen.yaml`。不得在 adapter 内回退到用户 Home 目录。
 - Alembic migration 只向前执行；现有 Schema v1 经完整性和结构校验后原地 stamp，不重建业务表。
 - 数据库版本高于程序支持版本时立即拒绝运行。
 - SQLAlchemy engine 的每个 SQLite connection 统一启用 foreign keys、WAL 和 busy timeout。

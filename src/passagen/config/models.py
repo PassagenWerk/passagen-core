@@ -9,7 +9,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_CONFIG_PATH = Path("passagen.yaml")
+CONFIG_FILENAME = "passagen.yaml"
+DEFAULT_DATA_DIR = Path("data")
+LEGACY_CONFIG_PATH = Path("passagen.yaml")
 ENV_PREFIX = "PASSAGEN_"
 
 
@@ -132,7 +134,9 @@ class Settings(BaseSettings):
         extra="forbid",
     )
 
-    data_dir: Path = Path("data")
+    # data_dir only comes from the command line (or the ./data default); it is
+    # rejected in YAML and via PASSAGEN_DATA_DIR by load_settings below.
+    data_dir: Path = DEFAULT_DATA_DIR
     database_path: Path | None = None
     debug: bool = False
     providers: ProvidersSettings = Field(default_factory=ProvidersSettings)
@@ -157,16 +161,54 @@ def load_settings(
     config_path: Path | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> Settings:
-    path = (config_path or DEFAULT_CONFIG_PATH).expanduser()
-    values = _read_config(path) if path.exists() else {}
+    """Load settings from ``<data_dir>/passagen.yaml``, environment, and CLI overrides.
+
+    The config file lives inside the data directory so a library is self-contained.
+    ``data_dir`` itself can only come from the command line (default ``./data``);
+    setting it in YAML or via ``PASSAGEN_DATA_DIR`` is rejected.
+    """
+    if f"{ENV_PREFIX}DATA_DIR" in os.environ:
+        raise ConfigError(
+            f"{ENV_PREFIX}DATA_DIR is not supported; use the --data-dir command line option instead"
+        )
+
+    cli_overrides = {key: value for key, value in (overrides or {}).items() if value is not None}
+    data_dir = Path(cli_overrides.get("data_dir") or DEFAULT_DATA_DIR).expanduser()
+
+    path = _resolve_config_path(config_path, data_dir)
+    values = _read_config(path) if path is not None else {}
+
+    if "data_dir" in values:
+        raise ConfigError(
+            f"Config {path} must not set 'data_dir'; use the --data-dir command line option instead"
+        )
 
     _remove_environment_overrides(values)
-    values.update({key: value for key, value in (overrides or {}).items() if value is not None})
+    values.update(cli_overrides)
+    # Pass data_dir as an init keyword so the environment can never populate it.
+    values["data_dir"] = data_dir
 
     try:
         return Settings(**values)
     except ValidationError as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def _resolve_config_path(config_path: Path | None, data_dir: Path) -> Path | None:
+    if config_path is not None:
+        return config_path.expanduser()
+
+    candidate = data_dir / CONFIG_FILENAME
+    legacy = LEGACY_CONFIG_PATH
+    if candidate.exists():
+        if legacy.exists():
+            raise ConfigError(
+                f"Config exists in both {candidate} and {legacy}; keep only {candidate}"
+            )
+        return candidate
+    if legacy.exists():
+        raise ConfigError(f"Config location has moved to {candidate}; move {legacy} there")
+    return None
 
 
 def _read_config(path: Path) -> dict[str, Any]:
