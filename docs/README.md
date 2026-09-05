@@ -1,6 +1,6 @@
 # Passagen Core Documentation
 
-仓库文档同时发布到多个 Git 远端。README 中的跨仓库链接使用同级目录相对路径，docs 内文件以纯文本注明目标仓库与路径，保证各远端解析一致。
+仓库文档同时发布到多个 Git 远端。README 中的跨仓库链接使用以 /PassagenWerk/ 开头的站点根路径，docs 内文件以纯文本注明目标仓库与路径，保证各远端解析一致。
 
 ## 用户文档
 

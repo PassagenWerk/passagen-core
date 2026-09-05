@@ -6,8 +6,8 @@ Abstract clean、结构化 Summary、Outline、SQLite 数据和受管理 artifac
 
 Core 本身不提供命令行或 HTTP 服务。一般用户应选择以下入口：
 
-- [Passagen CLI](../passagen-cli/)：导入和批量处理论文。
-- [Passagen Web](../passagen-web/)：通过浏览器管理和阅读论文库。
+- [Passagen CLI](/PassagenWerk/passagen-cli)：导入和批量处理论文。
+- [Passagen Web](/PassagenWerk/passagen-web)：通过浏览器管理和阅读论文库。
 
 ## 功能
 
