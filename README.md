@@ -6,8 +6,10 @@ Abstract clean、结构化 Summary、Outline、SQLite 数据和受管理 artifac
 
 Core 本身不提供命令行或 HTTP 服务。一般用户应选择以下入口：
 
-- [Passagen CLI](/PassagenWerk/passagen-cli)：导入和批量处理论文。
-- [Passagen Web](/PassagenWerk/passagen-web)：通过浏览器管理和阅读论文库。
+- [Passagen CLI](https://github.com/PassagenWerk/passagen-cli)：导入和批量处理论文。
+- [Passagen Web](https://github.com/PassagenWerk/passagen-web)：通过浏览器管理和阅读论文库。
+
+README 中的仓库链接指向 GitHub；在 GitLab 或 Gitea 镜像中，对应仓库位于同一 PassagenWerk 组的同名路径下。
 
 ## 功能
 
