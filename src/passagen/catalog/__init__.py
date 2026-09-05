@@ -72,11 +72,17 @@ class SortDirection(StrEnum):
     DESC = "desc"
 
 
+class TagMatch(StrEnum):
+    ALL = "all"
+    ANY = "any"
+
+
 @dataclass(frozen=True, slots=True)
 class PaperFilters:
     query: str | None = None
     status: PaperStatus | None = None
-    tag_id: str | None = None
+    tag_ids: tuple[str, ...] = ()
+    tag_match: TagMatch = TagMatch.ALL
     venue: str | None = None
     year: int | None = None
     collection_id: str | None = None
@@ -116,6 +122,15 @@ class Tag:
     name: str
     color: str | None
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TagUsage:
+    id: str
+    name: str
+    color: str | None
+    created_at: str
+    paper_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +265,19 @@ class CatalogService:
         with session_scope(self.database_path) as session:
             rows = session.scalars(select(TagRow).order_by(TagRow.normalized_name, TagRow.id)).all()
             return tuple(_tag(row) for row in rows)
+
+    def list_tag_usage(self) -> tuple[TagUsage, ...]:
+        with session_scope(self.database_path) as session:
+            statement = (
+                select(TagRow, func.count(PaperTagRow.paper_id))
+                .outerjoin(PaperTagRow, PaperTagRow.tag_id == TagRow.id)
+                .group_by(TagRow.id)
+                .order_by(TagRow.normalized_name, TagRow.id)
+            )
+            return tuple(
+                TagUsage(row.id, row.name, row.color, row.created_at, int(paper_count))
+                for row, paper_count in session.execute(statement)
+            )
 
     def get_tag(self, tag_id: str) -> Tag:
         with session_scope(self.database_path) as session:
@@ -529,8 +557,20 @@ def _filtered_papers(filters: PaperFilters) -> Select[tuple[PaperRow]]:
         statement = statement.where(PaperRow.venue == filters.venue)
     if filters.year is not None:
         statement = statement.where(PaperRow.year == filters.year)
-    if filters.tag_id:
-        statement = statement.join(PaperTagRow).where(PaperTagRow.tag_id == filters.tag_id)
+    if filters.tag_ids:
+        if filters.tag_match is TagMatch.ANY:
+            statement = statement.where(
+                select(PaperTagRow.paper_id)
+                .where(PaperTagRow.paper_id == PaperRow.id, PaperTagRow.tag_id.in_(filters.tag_ids))
+                .exists()
+            )
+        else:
+            for tag_id in dict.fromkeys(filters.tag_ids):
+                statement = statement.where(
+                    select(PaperTagRow.paper_id)
+                    .where(PaperTagRow.paper_id == PaperRow.id, PaperTagRow.tag_id == tag_id)
+                    .exists()
+                )
     if filters.collection_id:
         statement = statement.join(CollectionPaperRow).where(
             CollectionPaperRow.collection_id == filters.collection_id
@@ -669,5 +709,7 @@ __all__ = [
     "PaperView",
     "SortDirection",
     "Tag",
+    "TagMatch",
+    "TagUsage",
     "validate_summary_json",
 ]

@@ -4,6 +4,17 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `TagUsage` projection and `CatalogService.list_tag_usage()` returning per-tag paper counts from
+  a single aggregate query.
+
+### Changed
+
+- `PaperFilters` replaces the single `tag_id` with `tag_ids` plus a `tag_match` mode (`all`
+  requires every selected tag, `any` accepts papers carrying at least one); multi-tag filtering
+  keeps result totals, ordering, and pagination exact.
+
 ## [0.3.1] - 2026-09-04
 
 ### Fixed

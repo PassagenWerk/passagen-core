@@ -13,6 +13,7 @@ from passagen.catalog import (
     PaperFilters,
     PaperSort,
     SortDirection,
+    TagMatch,
     validate_summary_json,
 )
 from passagen.domain import BibliographicMetadata, PaperStatus
@@ -70,6 +71,50 @@ def test_paper_list_filters_sorts_and_paginates(tmp_path: Path) -> None:
     assert page.items[0].artifact_kinds == ()
     with pytest.raises(CatalogValidationError):
         catalog.list_papers(limit=0)
+
+
+def test_paper_list_filters_by_multiple_tags(tmp_path: Path) -> None:
+    catalog, _ = _library(tmp_path, count=4)
+    systems = catalog.create_tag("Systems")
+    priority = catalog.create_tag("Priority")
+    catalog.add_paper_tag("paper-0", systems.id)
+    catalog.add_paper_tag("paper-1", systems.id)
+    catalog.add_paper_tag("paper-1", priority.id)
+
+    both = catalog.list_papers(PaperFilters(tag_ids=(systems.id, priority.id)))
+    assert both.total == 1
+    assert [paper.id for paper in both.items] == ["paper-1"]
+
+    either = catalog.list_papers(
+        PaperFilters(tag_ids=(systems.id, priority.id), tag_match=TagMatch.ANY)
+    )
+    assert either.total == 2
+    assert [paper.id for paper in either.items] == ["paper-0", "paper-1"]
+
+    single = catalog.list_papers(PaperFilters(tag_ids=(systems.id,)))
+    assert single.total == 2
+
+    duplicated = catalog.list_papers(PaperFilters(tag_ids=(systems.id, systems.id, priority.id)))
+    assert duplicated.total == 1
+
+    unknown = catalog.list_papers(PaperFilters(tag_ids=(systems.id, "missing-tag")))
+    assert unknown.total == 0
+    assert unknown.items == ()
+
+
+def test_tag_usage_reports_assignment_counts(tmp_path: Path) -> None:
+    catalog, _ = _library(tmp_path)
+    systems = catalog.create_tag("Systems")
+    unused = catalog.create_tag("Unused")
+    catalog.add_paper_tag("paper-0", systems.id)
+    catalog.add_paper_tag("paper-1", systems.id)
+
+    usage = catalog.list_tag_usage()
+
+    assert [(tag.name, tag.paper_count) for tag in usage] == [("Systems", 2), ("Unused", 0)]
+    assert usage[0].color is None
+    catalog.delete_tag(unused.id)
+    assert [tag.name for tag in catalog.list_tag_usage()] == ["Systems"]
 
 
 def test_tags_are_normalized_and_assignments_are_replaced(tmp_path: Path) -> None:
