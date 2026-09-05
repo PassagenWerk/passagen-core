@@ -16,13 +16,13 @@ from passagen.stages.progress import ProgressCallback, report_progress
 from passagen.stages.summarization import SummaryError, summarize_paper
 from passagen.stages.updating.models import (
     LATEST_IMPLEMENTED_STATUS,
-    STATUS_ORDER,
     UpdateEvent,
     UpdateEventCallback,
     UpdateFailure,
     UpdateResult,
     UpdateTargetError,
     rebuild_stage_index,
+    status_stage_index,
 )
 from passagen.storage.repository import PaperRecord, get_paper, list_papers
 
@@ -113,14 +113,16 @@ def update_papers(
         try:
             current = paper
             warnings: list[str] = []
-            status_index = STATUS_ORDER.index(current.status)
+            status_index = status_stage_index(current.status)
             needs_metadata = status_index < 1 or rebuild_from == 1
             needs_parsing = status_index < 2 or (rebuild_from is not None and rebuild_from <= 2)
-            needs_abstract_fix = pipeline.abstract_fixing.enabled and bool(
-                current.abstract or needs_parsing
+            needs_abstract_fix = (
+                pipeline.abstract_fixing.enabled
+                and bool(current.abstract or needs_parsing)
+                and (rebuild_from is None or rebuild_from <= 3)
             )
-            needs_summary = status_index < 3 or (rebuild_from is not None and rebuild_from <= 3)
-            needs_outline = status_index < 4 or rebuild_from is not None
+            needs_summary = status_index < 4 or (rebuild_from is not None and rebuild_from <= 4)
+            needs_outline = status_index < 5 or rebuild_from is not None
             stage_total = (
                 int(needs_metadata)
                 + int(needs_parsing)
@@ -212,7 +214,7 @@ def update_papers(
                     index,
                     total,
                     paper,
-                    "abstract fix",
+                    "abstract clean",
                     "starting.",
                     stage_number=stage_number,
                     stage_total=stage_total,
@@ -225,7 +227,7 @@ def update_papers(
                         providers.llm,
                         pipeline.abstract_fixing,
                         provider_health=provider_health,
-                        force=rebuild_from is not None and rebuild_from <= 2,
+                        force=rebuild_from is not None and rebuild_from <= 3,
                         provider=abstract_provider or summary_provider,
                         execution_log_dir=execution_log_dir,
                         progress=partial(
@@ -235,7 +237,7 @@ def update_papers(
                             index,
                             total,
                             paper,
-                            "abstract fix",
+                            "abstract clean",
                             stage_number=stage_number,
                             stage_total=stage_total,
                         ),
@@ -272,7 +274,7 @@ def update_papers(
                     pipeline.summarization,
                     provider_health=provider_health,
                     execution_log_dir=execution_log_dir,
-                    force=rebuild_from is not None and rebuild_from <= 3,
+                    force=rebuild_from is not None and rebuild_from <= 4,
                     provider=summary_provider,
                     progress=partial(
                         _report_paper_progress,

@@ -138,6 +138,8 @@ def test_start_update_validates_papers_and_mode(tmp_path: Path) -> None:
         service.start_update([paper_id], from_stage="parse")
     with pytest.raises(ProcessingError, match="Unknown stage"):
         service.start_update([paper_id], mode="rebuild", from_stage="publish")
+    abstract = service.start_update([paper_id], mode="rebuild", from_stage="abstract")
+    assert abstract.from_stage == "abstract"
 
 
 def test_execute_run_completes_and_records_events(tmp_path: Path) -> None:

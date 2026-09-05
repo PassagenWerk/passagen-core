@@ -7,18 +7,18 @@ from passagen.storage.repository import PaperRecord
 LATEST_IMPLEMENTED_STATUS = PaperStatus.OUTLINED
 
 # Stages that can be explicitly rebuilt via ``from_stage``.
-REBUILD_STAGES = ("metadata", "parse", "summary", "outline")
+REBUILD_STAGES = ("metadata", "parse", "abstract", "summary", "outline")
 
-# Stage numbers aligned with PaperStatus progression:
-# discovered(0) -> metadata(1) -> parse(2) -> summary(3) -> outline(4).
-_STAGE_INDEX = {"metadata": 1, "parse": 2, "summary": 3, "outline": 4}
-STATUS_ORDER = (
-    PaperStatus.DISCOVERED,
-    PaperStatus.METADATA_RESOLVED,
-    PaperStatus.PARSED,
-    PaperStatus.SUMMARIZED,
-    PaperStatus.OUTLINED,
-)
+# Abstract cleaning is explicit but non-blocking, so it has a rebuild position without a
+# corresponding PaperStatus checkpoint.
+_STAGE_INDEX = {"metadata": 1, "parse": 2, "abstract": 3, "summary": 4, "outline": 5}
+_STATUS_STAGE_INDEX = {
+    PaperStatus.DISCOVERED: 0,
+    PaperStatus.METADATA_RESOLVED: 1,
+    PaperStatus.PARSED: 2,
+    PaperStatus.SUMMARIZED: 4,
+    PaperStatus.OUTLINED: 5,
+}
 
 
 class UpdateTargetError(ValueError):
@@ -62,3 +62,7 @@ def rebuild_stage_index(from_stage: str) -> int:
         raise UpdateTargetError(
             f"Unknown stage: {from_stage}; expected one of {', '.join(REBUILD_STAGES)}"
         ) from None
+
+
+def status_stage_index(status: PaperStatus) -> int:
+    return _STATUS_STAGE_INDEX[status]

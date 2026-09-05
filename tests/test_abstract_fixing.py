@@ -166,4 +166,37 @@ def test_update_pipeline_runs_abstract_fix_before_outline(
     assert not result.failures
     assert provider.calls == 1
     assert load_cleaned_abstract(database_path, data_dir, paper_id) is not None
-    assert events.index("abstract fix") < events.index("outline")
+    assert events.index("abstract clean") < events.index("outline")
+
+
+def test_update_pipeline_reports_abstract_clean_failure_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = "The evaluation reports 17.2% higher throughput while preserving every original claim."
+    database_path, data_dir, paper_id = setup_abstract(tmp_path, raw)
+    update_paper_status(database_path, paper_id, PaperStatus.SUMMARIZED)
+    provider = FakeProvider(
+        [json.dumps({"cleaned_abstract": raw.replace("17.2", "17.5"), "corrections": []})]
+    )
+
+    def fake_outline(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        paper = get_paper(database_path, paper_id)
+        assert paper is not None
+        return SimpleNamespace(paper=paper)
+
+    monkeypatch.setattr("passagen.stages.updating.service.outline_paper", fake_outline)
+
+    result = update_papers(
+        database_path,
+        data_dir,
+        ProvidersSettings(),
+        PipelineSettings(),
+        paper_ids=[paper_id],
+        abstract_provider=provider,
+        provider_health=ProviderHealthSnapshot({"llm": ProviderStatus("llm", True, "test")}),
+    )
+
+    assert not result.failures
+    assert len(result.warnings) == 1
+    assert "numeric value" in result.warnings[0].message
+    assert [paper.id for paper in result.updated] == [paper_id]

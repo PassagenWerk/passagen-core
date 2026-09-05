@@ -8,8 +8,8 @@ All notable changes to Passagen Core are documented in this file.
 
 - Canonical paper abstracts with schema version 4 storage, arXiv and GROBID metadata support,
   full-text parser extraction, source tracking, and user-edit precedence.
-- A default post-parse `abstract_fix` task that stores validated LLM-cleaned text as a separate,
-  hash-keyed artifact while retaining the original author abstract.
+- An explicit, non-blocking `abstract` processing stage that stores validated LLM-cleaned text as
+  a separate, hash-keyed artifact while retaining the original author abstract.
 
 ## [0.4.0] - 2026-09-05
 
