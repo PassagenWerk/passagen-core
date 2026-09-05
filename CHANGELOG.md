@@ -4,6 +4,8 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-05
+
 ### Added
 
 - Canonical paper abstracts with schema version 4 storage, arXiv and GROBID metadata support,
