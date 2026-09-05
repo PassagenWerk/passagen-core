@@ -4,6 +4,8 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-05
+
 ### Added
 
 - `TagUsage` projection and `CatalogService.list_tag_usage()` returning per-tag paper counts from
