@@ -44,8 +44,8 @@ class LlmSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o-mini"
+    base_url: str = "https://api.deepseek.com/v1"
+    model: str = "deepseek-flash-v4"
     api_key_env: str = "PASSAGEN_API_KEY"
     timeout_seconds: float = Field(default=120.0, gt=0)
     disable_thinking: bool = False

@@ -1,9 +1,13 @@
 # Roadmap: Collection Research and Exploration
 
-本文档定义第二阶段工作：在 `passagen-core` 边界稳定后，为 collection 增加基于外部 LLM
+# Collection Research and Exploration
+
+**状态：计划中**
+
+本文档定义为 collection 增加基于外部 LLM
 的对比、综述、自定义研究和对话问答能力，并由 CLI 和 Web 以适合各自场景的方式提供入口。
 
-前置条件是 [`history/roadmap-core-split.md`](history/roadmap-core-split.md) 已完成。LLM、上下文构建、引用、
+LLM、上下文构建、引用、
 持久化和错误恢复必须由 Core 实现，CLI 和 Web 不各自维护一套 prompt 或编排逻辑。
 
 ## 产品目标

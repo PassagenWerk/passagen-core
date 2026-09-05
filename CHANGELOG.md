@@ -15,6 +15,9 @@ All notable changes to Passagen Core are documented in this file.
 
 - Rebuilding from the independent `abstract` stage now refreshes only the cleaned Abstract view;
   Summary, Outline, and PaperStatus remain unchanged.
+- Defaulted the OpenAI-compatible LLM configuration to DeepSeek `deepseek-flash-v4` and organized
+  user, development, and roadmap documentation by audience and delivery status, with
+  forge-neutral cross-repository links.
 
 ## [0.4.0] - 2026-09-05
 

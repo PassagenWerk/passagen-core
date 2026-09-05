@@ -1,6 +1,6 @@
 # Passagen Python 代码风格
 
-本文档定义 Passagen 的 Python 编码与测试约定。规则参考 Denkbild 的 Python 工程实践，并使用两套互补的类型检查器和一组统一命令。
+本文档定义 Passagen 的 Python 编码与测试约定，并使用两套互补的类型检查器和统一检查命令。
 
 ## 基线
 

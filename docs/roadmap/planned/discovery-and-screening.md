@@ -1,5 +1,9 @@
 # Passagen Conference Discovery & Screening Roadmap
 
+# Conference Discovery and Screening
+
+**状态：计划中**
+
 ## 1. 目标
 
 为 Passagen 增加一个位于现有 PDF 解析流程之前的论文发现与筛选阶段，使其能够从指定会议和年份出发，自动完成：
@@ -251,7 +255,7 @@ class PaperDiscoveryProvider(Protocol):
     ) -> list[PaperMetadata]: ...
 ```
 
-按 `architecture.md` 的依赖方向落位：
+按 [Core 架构](../../development/architecture.md) 的依赖方向落位：
 
 ```text
 passagen-core/src/passagen/
@@ -823,7 +827,9 @@ passagen collect sigcomm 2025 \
 
 # 13. 建议目录结构
 
-遵循 monorepo 现有边界：共享业务逻辑在 `passagen-core`，CLI 在 `passagen-cli`。按 `architecture.md` 的依赖规则，HTTP 细节只在 `external/`，重试与限流在 `providers/`，编排在 `stages/`。
+遵循现有仓库边界：共享业务逻辑在 `passagen-core`，CLI 入口在
+passagen-cli 仓库。按
+[Core 架构](../../development/architecture.md) 的依赖规则，HTTP 细节只在 `external/`，重试与限流在 `providers/`，编排在 `stages/`。
 
 ```text
 passagen-core/src/passagen/

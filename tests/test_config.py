@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from passagen.config import CONFIG_FILENAME, ConfigError, load_settings
+from passagen.config import CONFIG_FILENAME, ConfigError, LlmSettings, load_settings
+
+
+def test_defaults_to_deepseek_flash() -> None:
+    settings = LlmSettings()
+
+    assert settings.base_url == "https://api.deepseek.com/v1"
+    assert settings.model == "deepseek-flash-v4"
 
 
 def test_reads_config_from_default_data_dir(
