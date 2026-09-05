@@ -11,6 +11,11 @@ All notable changes to Passagen Core are documented in this file.
 - An explicit, non-blocking `abstract` processing stage that stores validated LLM-cleaned text as
   a separate, hash-keyed artifact while retaining the original author abstract.
 
+### Changed
+
+- Rebuilding from the independent `abstract` stage now refreshes only the cleaned Abstract view;
+  Summary, Outline, and PaperStatus remain unchanged.
+
 ## [0.4.0] - 2026-09-05
 
 ### Added

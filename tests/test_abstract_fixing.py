@@ -200,3 +200,40 @@ def test_update_pipeline_reports_abstract_clean_failure_without_blocking(
     assert len(result.warnings) == 1
     assert "numeric value" in result.warnings[0].message
     assert [paper.id for paper in result.updated] == [paper_id]
+
+
+def test_rebuild_abstract_only_does_not_regenerate_downstream_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = "A raw author abstract with enough text to pass conservative validation checks."
+    cleaned = "A clean author abstract with enough text to pass conservative validation checks."
+    database_path, data_dir, paper_id = setup_abstract(tmp_path, raw)
+    update_paper_status(database_path, paper_id, PaperStatus.OUTLINED)
+    provider = FakeProvider(
+        [json.dumps({"cleaned_abstract": cleaned, "corrections": ["Repaired wording"]})]
+    )
+
+    monkeypatch.setattr(
+        "passagen.stages.updating.service.summarize_paper",
+        lambda *_args, **_kwargs: pytest.fail("Summary must not run for an Abstract-only rebuild"),
+    )
+    monkeypatch.setattr(
+        "passagen.stages.updating.service.outline_paper",
+        lambda *_args, **_kwargs: pytest.fail("Outline must not run for an Abstract-only rebuild"),
+    )
+
+    result = update_papers(
+        database_path,
+        data_dir,
+        ProvidersSettings(),
+        PipelineSettings(),
+        paper_ids=[paper_id],
+        from_stage="abstract",
+        abstract_provider=provider,
+        provider_health=ProviderHealthSnapshot({"llm": ProviderStatus("llm", True, "test")}),
+    )
+
+    assert not result.failures
+    assert [paper.id for paper in result.updated] == [paper_id]
+    assert result.updated[0].status is PaperStatus.OUTLINED
+    assert load_cleaned_abstract(database_path, data_dir, paper_id) is not None

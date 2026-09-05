@@ -65,6 +65,7 @@ def update_papers(
     rebuild_from = rebuild_stage_index(from_stage) if from_stage is not None else None
     papers = _select_papers(database_path, paper_id, paper_ids)
     target_status = LATEST_IMPLEMENTED_STATUS
+    rebuild_abstract_only = from_stage == "abstract"
     logger.info(
         "update started: target=%s from_stage=%s selected=%s latest_status=%s",
         paper_id or (f"{len(paper_ids)} ids" if paper_ids is not None else "all"),
@@ -121,8 +122,12 @@ def update_papers(
                 and bool(current.abstract or needs_parsing)
                 and (rebuild_from is None or rebuild_from <= 3)
             )
-            needs_summary = status_index < 4 or (rebuild_from is not None and rebuild_from <= 4)
-            needs_outline = status_index < 5 or rebuild_from is not None
+            needs_summary = not rebuild_abstract_only and (
+                status_index < 4 or (rebuild_from is not None and rebuild_from <= 4)
+            )
+            needs_outline = not rebuild_abstract_only and (
+                status_index < 5 or rebuild_from is not None
+            )
             stage_total = (
                 int(needs_metadata)
                 + int(needs_parsing)
