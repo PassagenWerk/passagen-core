@@ -108,6 +108,8 @@ def parse_paper(
         sha256=digest,
         size_bytes=len(content),
         status=PaperStatus.PARSED,
+        abstract=parsed.metadata.abstract,
+        abstract_source="pdf" if parsed.parser == "pymupdf" else parsed.parser,
     )
     logger.info(
         "parse finished: paper_id=%s parser=%s sections=%s references=%s artifact=%s",

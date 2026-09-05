@@ -372,7 +372,16 @@ def _missing_metadata(
     fallback: BibliographicMetadata,
 ) -> BibliographicMetadata:
     values: dict[str, object] = {}
-    for name in ("title", "authors", "year", "venue", "doi", "arxiv_id", "source_url"):
+    for name in (
+        "title",
+        "abstract",
+        "authors",
+        "year",
+        "venue",
+        "doi",
+        "arxiv_id",
+        "source_url",
+    ):
         primary_value = getattr(primary, name)
         fallback_value = getattr(fallback, name)
         if primary_value in (None, (), "") and fallback_value not in (None, (), ""):
@@ -381,6 +390,7 @@ def _missing_metadata(
     year_value = values.get("year")
     return BibliographicMetadata(
         title=str(values["title"]) if "title" in values else None,
+        abstract=str(values["abstract"]) if "abstract" in values else None,
         authors=(
             tuple(str(author) for author in authors_value)
             if isinstance(authors_value, tuple)
@@ -412,6 +422,7 @@ def _existing_metadata(paper: PaperRecord) -> BibliographicMetadata:
         return value if value not in (None, (), "") and source in (None, "user") else None
 
     title = user_value("title", paper.title)
+    abstract = user_value("abstract", paper.abstract)
     authors = user_value("authors", paper.authors)
     year = user_value("year", paper.year)
     venue = user_value("venue", paper.venue)
@@ -420,6 +431,7 @@ def _existing_metadata(paper: PaperRecord) -> BibliographicMetadata:
     source_url = user_value("source_url", paper.source_url)
     values = {
         "title": title,
+        "abstract": abstract,
         "authors": authors,
         "year": year,
         "venue": venue,
@@ -430,6 +442,7 @@ def _existing_metadata(paper: PaperRecord) -> BibliographicMetadata:
     sources = {name: "user" for name, value in values.items() if value is not None}
     return BibliographicMetadata(
         title=str(title) if title is not None else None,
+        abstract=str(abstract) if abstract is not None else None,
         authors=tuple(str(author) for author in authors) if isinstance(authors, tuple) else (),
         year=int(year) if isinstance(year, int) else None,
         venue=str(venue) if venue is not None else None,

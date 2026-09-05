@@ -18,7 +18,7 @@ from passagen.catalog import (
 )
 from passagen.domain import BibliographicMetadata, PaperStatus
 from passagen.storage.database import connect_database, initialize_database
-from passagen.storage.repository import update_paper_metadata
+from passagen.storage.repository import update_paper_abstract, update_paper_metadata
 
 
 def _library(tmp_path: Path, count: int = 3) -> tuple[CatalogService, Path]:
@@ -226,30 +226,42 @@ def test_user_metadata_survives_pipeline_refresh(tmp_path: Path) -> None:
     catalog, database_path = _library(tmp_path, 1)
     original = catalog.get_paper("paper-0")
     edited = catalog.update_user_metadata(
-        "paper-0", title="My title", year=2025, expected_updated_at=original.updated_at
+        "paper-0",
+        title="My title",
+        abstract="My abstract",
+        year=2025,
+        expected_updated_at=original.updated_at,
     )
-    assert edited.metadata_sources == {"title": "user", "year": "user"}
+    assert edited.metadata_sources == {"abstract": "user", "title": "user", "year": "user"}
 
     update_paper_metadata(
         database_path,
         "paper-0",
         BibliographicMetadata(
             title="Generated title",
+            abstract="Generated abstract",
             year=2024,
             venue="Generated venue",
-            sources={"title": "crossref", "year": "crossref", "venue": "crossref"},
+            sources={
+                "title": "crossref",
+                "abstract": "crossref",
+                "year": "crossref",
+                "venue": "crossref",
+            },
         ),
         PaperStatus.METADATA_RESOLVED,
     )
 
     refreshed = catalog.get_paper("paper-0")
-    assert (refreshed.title, refreshed.year, refreshed.venue) == (
+    assert (refreshed.title, refreshed.abstract, refreshed.year, refreshed.venue) == (
         "My title",
+        "My abstract",
         2025,
         "Generated venue",
     )
     assert refreshed.metadata_sources == {
         "title": "user",
+        "abstract": "user",
         "venue": "crossref",
         "year": "user",
     }
@@ -257,6 +269,30 @@ def test_user_metadata_survives_pipeline_refresh(tmp_path: Path) -> None:
         catalog.update_user_metadata(
             "paper-0", title="Stale edit", expected_updated_at=original.updated_at
         )
+
+
+def test_metadata_refresh_without_abstract_preserves_parser_abstract(tmp_path: Path) -> None:
+    catalog, database_path = _library(tmp_path, 1)
+    update_paper_abstract(
+        database_path,
+        "paper-0",
+        "An abstract extracted from the managed PDF.",
+        source="pdf",
+    )
+
+    update_paper_metadata(
+        database_path,
+        "paper-0",
+        BibliographicMetadata(
+            title="Refreshed title",
+            sources={"title": "crossref"},
+        ),
+        PaperStatus.METADATA_RESOLVED,
+    )
+
+    refreshed = catalog.get_paper("paper-0")
+    assert refreshed.abstract == "An abstract extracted from the managed PDF."
+    assert refreshed.metadata_sources["abstract"] == "pdf"
 
 
 def test_artifact_resolution_stays_inside_data_directory(tmp_path: Path) -> None:

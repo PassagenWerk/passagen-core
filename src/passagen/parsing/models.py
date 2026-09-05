@@ -14,6 +14,7 @@ class ParsedMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = None
+    abstract: str | None = None
     authors: tuple[str, ...] = ()
     year: int | None = None
     venue: str | None = None

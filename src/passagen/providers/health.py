@@ -57,3 +57,11 @@ def check_provider_health(settings: ProvidersSettings) -> ProviderHealthSnapshot
             available, detail = future.result()
             statuses[name] = ProviderStatus(name, available, detail)
     return ProviderHealthSnapshot(statuses)
+
+
+def check_parser_health(settings: ProvidersSettings) -> ProviderHealthSnapshot:
+    available, detail = grobid_status(
+        settings.grobid.base_url,
+        settings.healthcheck_timeout_seconds,
+    )
+    return ProviderHealthSnapshot({"grobid": ProviderStatus("grobid", available, detail)})

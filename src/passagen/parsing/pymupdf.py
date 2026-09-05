@@ -40,14 +40,16 @@ class PyMuPdfParser:
                 f"Extracted text is shorter than {self.min_text_characters} characters",
             )
         title = _clean(raw_metadata.get("title")) or _first_line(all_text)
+        sections = tuple(_layout_sections(page_lines))
         return ParsedPaper(
             metadata=ParsedMetadata(
                 title=title,
+                abstract=_abstract(sections),
                 authors=_split_authors(raw_metadata.get("author")),
                 year=_year(_clean(raw_metadata.get("creationDate"))),
                 doi=extract_doi(all_text),
             ),
-            sections=tuple(_layout_sections(page_lines)),
+            sections=sections,
             parser=self.name,
         )
 
@@ -105,6 +107,14 @@ def _layout_sections(page_lines: list[list[tuple[str, float, int]]]) -> list[Par
             pages=tuple(range(1, len(page_lines) + 1)),
         )
     ]
+
+
+def _abstract(sections: tuple[ParsedSection, ...]) -> str | None:
+    for section in sections:
+        heading = re.sub(r"[^a-z]", "", (section.title or "").lower())
+        if heading == "abstract":
+            return _clean(section.text)
+    return None
 
 
 def _clean(value: object) -> str | None:

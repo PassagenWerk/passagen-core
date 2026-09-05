@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True, slots=True)
 class BibliographicMetadata:
     title: str | None = None
+    abstract: str | None = None
     authors: tuple[str, ...] = ()
     year: int | None = None
     venue: str | None = None

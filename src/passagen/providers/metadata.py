@@ -46,6 +46,7 @@ class MetadataProvider(Protocol):
 
 def merge_metadata(*items: BibliographicMetadata) -> BibliographicMetadata:
     title: str | None = None
+    abstract: str | None = None
     authors: tuple[str, ...] = ()
     year: int | None = None
     venue: str | None = None
@@ -54,10 +55,20 @@ def merge_metadata(*items: BibliographicMetadata) -> BibliographicMetadata:
     source_url: str | None = None
     sources: dict[str, str] = {}
     for item in items:
-        for name in ("title", "authors", "year", "venue", "doi", "arxiv_id", "source_url"):
+        for name in (
+            "title",
+            "abstract",
+            "authors",
+            "year",
+            "venue",
+            "doi",
+            "arxiv_id",
+            "source_url",
+        ):
             if getattr(item, name) not in (None, (), "") and (source := item.sources.get(name)):
                 sources[name] = source
         title = item.title or title
+        abstract = item.abstract or abstract
         authors = item.authors or authors
         year = item.year or year
         venue = item.venue or venue
@@ -66,6 +77,7 @@ def merge_metadata(*items: BibliographicMetadata) -> BibliographicMetadata:
         source_url = item.source_url or source_url
     return BibliographicMetadata(
         title=title,
+        abstract=abstract,
         authors=authors,
         year=year,
         venue=venue,

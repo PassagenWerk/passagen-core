@@ -3,6 +3,7 @@ from passagen.providers.health import (
     ProviderHealthSnapshot,
     ProviderStatus,
     ProviderUnavailableError,
+    check_parser_health,
     check_provider_health,
 )
 from passagen.providers.llm import (
@@ -21,6 +22,7 @@ __all__ = [
     "ProviderHealthSnapshot",
     "ProviderStatus",
     "ProviderUnavailableError",
+    "check_parser_health",
     "check_provider_health",
     "LlmCallStats",
     "LlmProvider",

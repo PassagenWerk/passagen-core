@@ -2,7 +2,11 @@ import httpx
 import pytest
 
 from passagen.config import ArxivSettings, CrossrefSettings, ProvidersSettings
-from passagen.providers import ProviderUnavailableError, check_provider_health
+from passagen.providers import (
+    ProviderUnavailableError,
+    check_parser_health,
+    check_provider_health,
+)
 
 
 def test_provider_health_records_results_without_raising(
@@ -49,3 +53,18 @@ def test_provider_health_does_not_probe_disabled_metadata_providers(
     assert health.statuses["crossref"].detail == "disabled by configuration"
     assert health.statuses["arxiv"].detail == "disabled by configuration"
     assert not any("crossref" in url or "arxiv" in url for url in requested)
+
+
+def test_parser_health_only_probes_grobid(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+
+    def get(url: str, **_kwargs: object) -> httpx.Response:
+        requested.append(url)
+        return httpx.Response(200, text="true")
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    health = check_parser_health(ProvidersSettings())
+
+    assert health.statuses["grobid"].available is True
+    assert requested == ["http://localhost:8070/api/isalive"]

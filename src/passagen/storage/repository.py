@@ -29,6 +29,7 @@ class PaperRecord:
     pdf_sha256: str
     status: PaperStatus
     title: str | None
+    abstract: str | None
     authors: tuple[str, ...]
     year: int | None
     venue: str | None
@@ -148,6 +149,35 @@ def update_paper_metadata(
         ) from exc
 
 
+def update_paper_abstract(
+    database_path: Path,
+    paper_id: str,
+    abstract: str,
+    *,
+    source: str,
+    overwrite: bool = False,
+) -> tuple[PaperRecord, bool]:
+    _require_database(database_path)
+    clean_abstract = " ".join(abstract.split())
+    if not clean_abstract:
+        raise ValueError("abstract must not be blank")
+    with session_scope(database_path) as session:
+        row = _paper_by_id(session, paper_id)
+        if row is None:
+            raise KeyError(paper_id)
+        sources = {
+            str(key): str(value) for key, value in _json_dict(row.metadata_sources_json).items()
+        }
+        if sources.get("abstract") == "user" or (row.abstract and not overwrite):
+            return _paper_record(row), False
+        row.abstract = clean_abstract
+        sources["abstract"] = source
+        row.metadata_sources_json = json.dumps(sources, ensure_ascii=False, sort_keys=True)
+        row.updated_at = str(session.scalar(select(func.strftime("%Y-%m-%d %H:%M:%f", "now"))))
+        session.flush()
+        return _paper_record(row), True
+
+
 def get_artifact(
     database_path: Path,
     paper_id: str,
@@ -177,12 +207,28 @@ def save_parsed_artifact(
     sha256: str,
     size_bytes: int,
     status: PaperStatus,
+    abstract: str | None = None,
+    abstract_source: str | None = None,
 ) -> tuple[PaperRecord, ArtifactRecord]:
     _require_database(database_path)
     with session_scope(database_path) as session:
         artifact = _upsert_artifact(
             session, paper_id, "extracted_json", path, version, sha256, size_bytes
         )
+        if abstract and abstract_source:
+            paper = session.get(PaperRow, paper_id)
+            if paper is None:
+                raise KeyError(paper_id)
+            sources = {
+                str(key): str(value)
+                for key, value in _json_dict(paper.metadata_sources_json).items()
+            }
+            if sources.get("abstract") != "user":
+                paper.abstract = abstract
+                sources["abstract"] = abstract_source
+                paper.metadata_sources_json = json.dumps(
+                    sources, ensure_ascii=False, sort_keys=True
+                )
         _update_paper_status(session, paper_id, status)
         paper = _paper_by_id(session, paper_id)
         if paper is None:
@@ -425,6 +471,7 @@ def _paper_record(row: PaperRow) -> PaperRecord:
         pdf_sha256=row.pdf_sha256,
         status=PaperStatus(row.status),
         title=row.title,
+        abstract=row.abstract,
         authors=tuple(str(author) for author in authors),
         year=row.year,
         venue=row.venue,
@@ -475,6 +522,7 @@ def _metadata_values_preserving_user_sources(
     sources = {str(key): str(value) for key, value in _json_dict(row.metadata_sources_json).items()}
     generated: dict[str, object] = {
         "title": metadata.title,
+        "abstract": metadata.abstract,
         "authors": metadata.authors,
         "year": metadata.year,
         "venue": metadata.venue,
@@ -484,6 +532,7 @@ def _metadata_values_preserving_user_sources(
     }
     existing: dict[str, object] = {
         "title": row.title,
+        "abstract": row.abstract,
         "authors": tuple(str(author) for author in _json_list(row.authors_json)),
         "year": row.year,
         "venue": row.venue,
@@ -492,12 +541,17 @@ def _metadata_values_preserving_user_sources(
         "source_url": row.source_url,
     }
     merged_sources = dict(metadata.sources)
+    if metadata.abstract in (None, "") and row.abstract:
+        generated["abstract"] = row.abstract
+        if abstract_source := sources.get("abstract"):
+            merged_sources["abstract"] = abstract_source
     for field, source in sources.items():
         if source == "user" and field in generated:
             generated[field] = existing[field]
             merged_sources[field] = "user"
     return {
         "title": generated["title"],
+        "abstract": generated["abstract"],
         "authors_json": json.dumps(generated["authors"], ensure_ascii=False),
         "year": generated["year"],
         "venue": generated["venue"],

@@ -80,6 +80,7 @@ class GrobidFulltextParser:
 
 def _tei_metadata(root: ET.Element) -> ParsedMetadata:
     title = _content(root.find("./tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", _NS))
+    abstract = _content(root.find("./tei:teiHeader/tei:profileDesc/tei:abstract", _NS))
     analytic = root.find(
         "./tei:teiHeader/tei:fileDesc/tei:sourceDesc/tei:biblStruct/tei:analytic", _NS
     )
@@ -98,6 +99,7 @@ def _tei_metadata(root: ET.Element) -> ParsedMetadata:
     arxiv_id = _tei_idno(bibl, "arxiv")
     return ParsedMetadata(
         title=title,
+        abstract=abstract,
         authors=authors,
         year=_year(date.get("when") if date is not None else None),
         venue=venue,

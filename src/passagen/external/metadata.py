@@ -186,6 +186,7 @@ def _crossref_metadata(message: dict[str, Any], identifier: str) -> Bibliographi
 
 def _arxiv_metadata(entry: ET.Element, identifier: str) -> BibliographicMetadata:
     title = _element_text(entry, f"{{{_ATOM}}}title")
+    abstract = _element_text(entry, f"{{{_ATOM}}}summary")
     authors = tuple(
         name
         for author in entry.findall(f"{{{_ATOM}}}author")
@@ -200,6 +201,7 @@ def _arxiv_metadata(entry: ET.Element, identifier: str) -> BibliographicMetadata
     arxiv_id = normalize_arxiv_id(identifier)
     values: dict[str, object] = {
         "title": title,
+        "abstract": abstract,
         "authors": authors,
         "year": year,
         "venue": venue,
@@ -209,6 +211,7 @@ def _arxiv_metadata(entry: ET.Element, identifier: str) -> BibliographicMetadata
     }
     return BibliographicMetadata(
         title=title,
+        abstract=abstract,
         authors=authors,
         year=year,
         venue=venue,
@@ -236,6 +239,9 @@ def _grobid_metadata(root: ET.Element) -> BibliographicMetadata:
     if title_element is None and analytic is not None:
         title_element = analytic.find("./tei:title", namespace)
     title = _element_content(title_element)
+    abstract = _element_content(
+        root.find("./tei:teiHeader/tei:profileDesc/tei:abstract", namespace)
+    )
     author_elements = (
         file_desc.findall("./tei:titleStmt/tei:author", namespace) if file_desc is not None else []
     )
@@ -261,6 +267,7 @@ def _grobid_metadata(root: ET.Element) -> BibliographicMetadata:
     year = _year_from_text(date.get("when") or _element_content(date)) if date is not None else None
     values: dict[str, object] = {
         "title": title,
+        "abstract": abstract,
         "authors": authors,
         "year": year,
         "venue": venue,
@@ -269,6 +276,7 @@ def _grobid_metadata(root: ET.Element) -> BibliographicMetadata:
     }
     return BibliographicMetadata(
         title=title,
+        abstract=abstract,
         authors=authors,
         year=year,
         venue=venue,

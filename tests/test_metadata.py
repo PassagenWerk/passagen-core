@@ -180,6 +180,7 @@ def test_arxiv_client_parses_exact_id_response() -> None:
     <id>https://arxiv.org/abs/2401.12345v2</id>
     <published>2024-01-20T00:00:00Z</published>
     <title>  An arXiv\n      Paper  </title>
+    <summary>  An author-written\n      arXiv overview.  </summary>
     <author><name>Ada Lovelace</name></author>
     <author><name>Alan Turing</name></author>
     <arxiv:doi>10.1000/example</arxiv:doi>
@@ -200,6 +201,7 @@ def test_arxiv_client_parses_exact_id_response() -> None:
 
     assert metadata is not None
     assert metadata.title == "An arXiv Paper"
+    assert metadata.abstract == "An author-written arXiv overview."
     assert metadata.authors == ("Ada Lovelace", "Alan Turing")
     assert metadata.year == 2024
     assert metadata.arxiv_id == "2401.12345"
@@ -232,6 +234,9 @@ def test_grobid_client_posts_pdf_and_parses_tei_header(tmp_path: Path) -> None:
         </biblStruct>
       </sourceDesc>
     </fileDesc>
+    <profileDesc><abstract>
+      <p>An author-written <hi>GROBID</hi> overview.</p>
+    </abstract></profileDesc>
   </teiHeader>
 </TEI>"""
 
@@ -250,6 +255,7 @@ def test_grobid_client_posts_pdf_and_parses_tei_header(tmp_path: Path) -> None:
 
     assert metadata is not None
     assert metadata.title == "Structured Paper Title"
+    assert metadata.abstract == "An author-written GROBID overview."
     assert metadata.authors == ("Ada Lovelace", "Alan Turing")
     assert metadata.year == 2025
     assert metadata.venue == "Test Conference"

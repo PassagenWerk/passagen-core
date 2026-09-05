@@ -93,6 +93,7 @@ class PaperFilters:
 class PaperView:
     id: str
     title: str | None
+    abstract: str | None
     authors: tuple[str, ...]
     year: int | None
     venue: str | None
@@ -218,12 +219,15 @@ class CatalogService:
         paper_id: str,
         *,
         title: str | None = None,
+        abstract: str | None = None,
         venue: str | None = None,
         year: int | None = None,
         expected_updated_at: str | None = None,
     ) -> PaperView:
         if title is not None and not title.strip():
             raise CatalogValidationError("title must not be blank")
+        if abstract is not None and not abstract.strip():
+            raise CatalogValidationError("abstract must not be blank")
         if venue is not None and not venue.strip():
             raise CatalogValidationError("venue must not be blank")
         if year is not None and not 0 < year <= 9999:
@@ -232,6 +236,7 @@ class CatalogService:
             key: value.strip() if isinstance(value, str) else value
             for key, value in {
                 "title": title,
+                "abstract": abstract,
                 "venue": venue,
                 "year": year,
             }.items()
@@ -604,6 +609,7 @@ def _paper_views(session: Session, rows: list[PaperRow]) -> list[PaperView]:
         PaperView(
             id=row.id,
             title=row.title,
+            abstract=row.abstract,
             authors=tuple(str(value) for value in _json_list(row.authors_json)),
             year=row.year,
             venue=row.venue,
