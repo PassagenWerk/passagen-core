@@ -19,6 +19,11 @@
 - [Completed capabilities](roadmap/completed/core-platform.md)
 - [Planned capabilities](roadmap/planned/collection-research-and-exploration.md)
 
+## 版本约定
+
+CLI 和 Web 的 minor 版本与其要求的 Core minor 保持一致：同一条 `0.5.x` 线上的三个包互相
+兼容。patch 版本各自独立演进；Core 的 minor 升级触发适配器至少一次对齐发布。
+
 Adapter documentation:
 
 - Passagen CLI 仓库的 docs/ 目录
