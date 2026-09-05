@@ -86,6 +86,14 @@ class ParsingSettings(BaseModel):
     min_text_characters: int = Field(default=10, ge=1)
 
 
+class AbstractFixingSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_output_tokens: int = Field(default=2_000, ge=100)
+    prompt_path: Path | None = None
+
+
 class SummarizationStrategy(StrEnum):
     AUTO = "auto"
     FULL = "full"
@@ -123,6 +131,7 @@ class PipelineSettings(BaseModel):
 
     metadata: MetadataSettings = Field(default_factory=MetadataSettings)
     parsing: ParsingSettings = Field(default_factory=ParsingSettings)
+    abstract_fixing: AbstractFixingSettings = Field(default_factory=AbstractFixingSettings)
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
     outlining: OutliningSettings = Field(default_factory=OutliningSettings)
 
@@ -256,6 +265,7 @@ def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
     if not isinstance(pipeline, dict):
         return
     prompt_keys = (
+        ("abstract_fixing", ("prompt_path",)),
         (
             "summarization",
             (

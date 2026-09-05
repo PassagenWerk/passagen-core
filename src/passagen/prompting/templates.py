@@ -77,6 +77,14 @@ def load_outline_prompt_template(path: Path | None) -> PromptTemplate:
     return load_prompt_template("outline-v2.txt", path, variables={"schema", "summary"})
 
 
+def load_abstract_fix_prompt_template(path: Path | None) -> PromptTemplate:
+    return load_prompt_template(
+        "abstract-fix-v1.txt",
+        path,
+        variables={"schema", "title", "abstract"},
+    )
+
+
 def load_prompt_template(
     builtin_name: str,
     override_path: Path | None,

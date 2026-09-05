@@ -24,6 +24,7 @@ from passagen.processing.models import (
 )
 from passagen.prompting import (
     PromptTemplateError,
+    load_abstract_fix_prompt_template,
     load_outline_prompt_template,
     load_summary_prompt_templates,
 )
@@ -163,6 +164,7 @@ class ProcessingService:
         execution_log_dir: Path | None = None,
         summary_provider: LlmProvider | None = None,
         outline_provider: LlmProvider | None = None,
+        abstract_provider: LlmProvider | None = None,
         provider_health: ProviderHealthSnapshot | None = None,
         llm_stats: LlmCallStats | None = None,
     ) -> UpdateResult:
@@ -194,6 +196,7 @@ class ProcessingService:
                 from_stage=run.from_stage,
                 summary_provider=summary_provider,
                 outline_provider=outline_provider,
+                abstract_provider=abstract_provider,
                 provider_health=health,
                 execution_log_dir=execution_log_dir or self._run_dir(run_id),
                 progress=progress,
@@ -316,6 +319,13 @@ def _prompt_versions(settings: Settings) -> dict[str, str]:
         )
     except PromptTemplateError as exc:
         versions["summarization"] = f"unavailable: {exc}"
+    try:
+        abstract_fix = load_abstract_fix_prompt_template(
+            settings.pipeline.abstract_fixing.prompt_path
+        )
+        versions["abstract_fix"] = abstract_fix.sha256
+    except PromptTemplateError as exc:
+        versions["abstract_fix"] = f"unavailable: {exc}"
     try:
         outline = load_outline_prompt_template(settings.pipeline.outlining.prompt_path)
         versions["outline"] = outline.sha256

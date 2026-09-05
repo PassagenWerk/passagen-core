@@ -236,6 +236,28 @@ def save_parsed_artifact(
         return _paper_record(paper), artifact
 
 
+def save_abstract_fix_artifact(
+    database_path: Path,
+    paper_id: str,
+    path: Path,
+    *,
+    version: str,
+    sha256: str,
+    size_bytes: int,
+) -> ArtifactRecord:
+    _require_database(database_path)
+    with session_scope(database_path) as session:
+        return _upsert_artifact(
+            session,
+            paper_id,
+            "abstract_cleaned_json",
+            path,
+            version,
+            sha256,
+            size_bytes,
+        )
+
+
 def save_summary_artifacts(
     database_path: Path,
     paper_id: str,

@@ -187,6 +187,8 @@ def test_resolves_relative_prompt_paths_against_config_directory(
     data_dir.mkdir()
     (data_dir / CONFIG_FILENAME).write_text(
         "pipeline:\n"
+        "  abstract_fixing:\n"
+        "    prompt_path: prompts/abstract.txt\n"
         "  summarization:\n"
         "    facts_prompt_path: prompts/facts.txt\n"
         "  outlining:\n"
@@ -195,5 +197,6 @@ def test_resolves_relative_prompt_paths_against_config_directory(
 
     settings = load_settings()
 
+    assert settings.pipeline.abstract_fixing.prompt_path == Path("data/prompts/abstract.txt")
     assert settings.pipeline.summarization.facts_prompt_path == Path("data/prompts/facts.txt")
     assert settings.pipeline.outlining.prompt_path == Path("/absolute/outline.txt")

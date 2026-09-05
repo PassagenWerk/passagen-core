@@ -8,6 +8,7 @@ from pathlib import Path
 from passagen.config import PipelineSettings, ProvidersSettings
 from passagen.domain import PaperStatus
 from passagen.providers import LlmCallStats, LlmProvider, ProviderHealthSnapshot
+from passagen.stages.abstract_fixing import AbstractFixError, fix_paper_abstract
 from passagen.stages.metadata import MetadataResolutionError, resolve_paper_metadata
 from passagen.stages.outlining import OutlineError, outline_paper
 from passagen.stages.parsing import PaperParsingError, parse_paper
@@ -51,6 +52,7 @@ def update_papers(
     from_stage: str | None = None,
     summary_provider: LlmProvider | None = None,
     outline_provider: LlmProvider | None = None,
+    abstract_provider: LlmProvider | None = None,
     provider_health: ProviderHealthSnapshot | None = None,
     execution_log_dir: Path | None = None,
     force: bool = False,
@@ -114,10 +116,17 @@ def update_papers(
             status_index = STATUS_ORDER.index(current.status)
             needs_metadata = status_index < 1 or rebuild_from == 1
             needs_parsing = status_index < 2 or (rebuild_from is not None and rebuild_from <= 2)
+            needs_abstract_fix = pipeline.abstract_fixing.enabled and bool(
+                current.abstract or needs_parsing
+            )
             needs_summary = status_index < 3 or (rebuild_from is not None and rebuild_from <= 3)
             needs_outline = status_index < 4 or rebuild_from is not None
             stage_total = (
-                int(needs_metadata) + int(needs_parsing) + int(needs_summary) + int(needs_outline)
+                int(needs_metadata)
+                + int(needs_parsing)
+                + int(needs_abstract_fix)
+                + int(needs_summary)
+                + int(needs_outline)
             )
             stage_number = 0
             if needs_metadata:
@@ -194,6 +203,53 @@ def update_papers(
                 current = parsing.paper
                 warnings.extend(parsing.warnings)
                 logger.info("update stage finished: paper_id=%s stage=full_text", paper.id)
+            if needs_abstract_fix:
+                stage_number += 1
+                logger.info("update stage started: paper_id=%s stage=abstract_fix", paper.id)
+                _report_paper_progress(
+                    progress,
+                    on_event,
+                    index,
+                    total,
+                    paper,
+                    "abstract fix",
+                    "starting.",
+                    stage_number=stage_number,
+                    stage_total=stage_total,
+                )
+                try:
+                    fixed = fix_paper_abstract(
+                        database_path,
+                        data_dir,
+                        paper.id,
+                        providers.llm,
+                        pipeline.abstract_fixing,
+                        provider_health=provider_health,
+                        force=rebuild_from is not None and rebuild_from <= 2,
+                        provider=abstract_provider or summary_provider,
+                        execution_log_dir=execution_log_dir,
+                        progress=partial(
+                            _report_paper_progress,
+                            progress,
+                            on_event,
+                            index,
+                            total,
+                            paper,
+                            "abstract fix",
+                            stage_number=stage_number,
+                            stage_total=stage_total,
+                        ),
+                        llm_stats=llm_stats,
+                    )
+                    current = fixed.paper
+                except AbstractFixError as exc:
+                    warnings.append(str(exc))
+                    logger.warning(
+                        "update stage warning: paper_id=%s stage=abstract_fix error=%s",
+                        paper.id,
+                        exc,
+                    )
+                logger.info("update stage finished: paper_id=%s stage=abstract_fix", paper.id)
             if needs_summary:
                 stage_number += 1
                 logger.info("update stage started: paper_id=%s stage=summarize", paper.id)
@@ -281,7 +337,7 @@ def update_papers(
                 progress, on_event, index, total, paper, "failed", "update failed; continuing."
             )
             continue
-        if needs_metadata or needs_parsing or needs_summary or needs_outline:
+        if needs_metadata or needs_parsing or needs_abstract_fix or needs_summary or needs_outline:
             result.updated.append(current)
             logger.info(
                 "update paper finished: paper_id=%s status=%s title=%s",
