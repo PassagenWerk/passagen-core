@@ -123,6 +123,38 @@ def test_extracts_layout_metadata_after_publisher_cover_text(tmp_path: Path) -> 
     )
 
 
+def test_layout_title_is_not_displaced_by_author_name_in_filename(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "nsdi26-dang.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((80, 150), "Mitigating CPU Frontend for Complex", fontsize=21)
+        page.insert_text((130, 178), "Data Plane Applications", fontsize=21)
+        page.insert_text(
+            (80, 210),
+            "Yihan Dang, Xi'an Jiaotong University; Hao Li, Example Labs;",
+            fontsize=14,
+        )
+        page.insert_text(
+            (80, 228), "Ze Xia, Jiajun Luan, and Peng Zhang, Example University", fontsize=14
+        )
+        document.save(pdf_path)
+
+    metadata = extract_pdf_metadata(
+        pdf_path,
+        first_pages=2,
+        filename_hint=pdf_path.name,
+    )
+
+    assert metadata.title == "Mitigating CPU Frontend for Complex Data Plane Applications"
+    assert metadata.authors == (
+        "Yihan Dang",
+        "Hao Li",
+        "Ze Xia",
+        "Jiajun Luan",
+        "Peng Zhang",
+    )
+
+
 def test_identifier_normalization() -> None:
     assert normalize_doi("https://doi.org/10.1000/ABC.1.") == "10.1000/abc.1"
     assert extract_doi("Published as doi:10.1000/Test-2)") == "10.1000/test-2"

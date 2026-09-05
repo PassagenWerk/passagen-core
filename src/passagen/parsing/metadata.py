@@ -144,27 +144,29 @@ def _extract_spans(document: pymupdf.Document, first_pages: int) -> list[_TextSp
             for line in block.get("lines", []):
                 if not isinstance(line, dict):
                     continue
-                for raw_span in line.get("spans", []):
-                    if not isinstance(raw_span, dict):
-                        continue
-                    text = _clean_text(raw_span.get("text"))
+                raw_spans = [span for span in line.get("spans", []) if isinstance(span, dict)]
+                valid_spans = []
+                for raw_span in raw_spans:
                     bbox = raw_span.get("bbox")
                     size = raw_span.get("size")
                     if (
-                        text is None
+                        not isinstance(raw_span.get("text"), str)
                         or not isinstance(bbox, (list, tuple))
                         or len(bbox) != 4
                         or not isinstance(size, (int, float))
                     ):
                         continue
+                    valid_spans.append(raw_span)
+                text = _clean_text("".join(str(span["text"]) for span in valid_spans))
+                if text is not None:
                     spans.append(
                         _TextSpan(
                             page=page_index,
                             text=text,
-                            size=float(size),
-                            x0=float(bbox[0]),
-                            y0=float(bbox[1]),
-                            y1=float(bbox[3]),
+                            size=max(float(span["size"]) for span in valid_spans),
+                            x0=min(float(span["bbox"][0]) for span in valid_spans),
+                            y0=min(float(span["bbox"][1]) for span in valid_spans),
+                            y1=max(float(span["bbox"][3]) for span in valid_spans),
                         )
                     )
     return spans
@@ -224,6 +226,7 @@ def _layout_authors(spans: list[_TextSpan], title: _TitleCandidate) -> tuple[str
 
 def _parse_layout_authors(text: str) -> tuple[str, ...]:
     normalized = re.sub(r"\s+and\s+", ", ", text, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s*;\s*", ", ", normalized)
     authors: list[str] = []
     for part in normalized.split(","):
         candidate = re.sub(r"^[\d*†‡§\s]+|[\d*†‡§\s]+$", "", part).strip()
@@ -270,8 +273,11 @@ def _word_overlap(left: str, right: str | None) -> float:
         return 0.0
     left_words = _words(left)
     right_words = _words(right)
+    shared_words = left_words & right_words
+    if len(shared_words) < 2:
+        return 0.0
     all_words = left_words | right_words
-    return len(left_words & right_words) / len(all_words) if all_words else 0.0
+    return len(shared_words) / len(all_words) if all_words else 0.0
 
 
 def _words(value: str) -> set[str]:
