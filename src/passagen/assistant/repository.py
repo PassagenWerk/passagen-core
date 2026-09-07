@@ -12,6 +12,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from passagen.assistant.schemas import (
+    DEFAULT_CONVERSATION_TITLE,
     ContextPlan,
     Conversation,
     ConversationScope,
@@ -322,8 +323,9 @@ def save_qa_turn(
     record: QaRecord,
     answer_content: str,
     run_id: str,
+    conversation_title: str | None = None,
 ) -> None:
-    """Atomically persist a completed answer message, QA record, citations, and run."""
+    """Atomically persist a completed answer, run, and initial conversation title."""
 
     with session_scope(database_path) as session:
         message = session.get(ConversationMessageRow, record.answer_message_id)
@@ -373,6 +375,8 @@ def save_qa_turn(
         run.completed_at = _now(session)
         conversation = session.get(ConversationRow, record.conversation_id)
         if conversation is not None:
+            if conversation_title is not None and conversation.title == DEFAULT_CONVERSATION_TITLE:
+                conversation.title = conversation_title
             conversation.updated_at = _now(session)
 
 

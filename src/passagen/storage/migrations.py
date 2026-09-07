@@ -8,8 +8,9 @@ from sqlalchemy import Connection, inspect
 
 from passagen.storage.engine import database_engine
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _BASELINE_REVISION = "0001"
+_LEGACY_REVISIONS = {1: _BASELINE_REVISION, 6: "0006"}
 _APPLICATION_TABLES = {"papers", "artifacts", "processing_runs", "llm_calls"}
 _REQUIRED_COLUMNS = {
     "papers": {"id", "original_filename", "pdf_sha256", "status"},
@@ -42,14 +43,10 @@ def initialize_schema(database_path: Path) -> None:
         elif (
             application_tables == _APPLICATION_TABLES
             and not has_alembic
-            and user_version
-            in {
-                1,
-                SCHEMA_VERSION,
-            }
+            and user_version in {*_LEGACY_REVISIONS, SCHEMA_VERSION}
         ):
             _validate_legacy_schema(connection)
-            command.stamp(config, _BASELINE_REVISION if user_version == 1 else head_revision())
+            command.stamp(config, _LEGACY_REVISIONS.get(user_version, head_revision()))
             command.upgrade(config, "head")
         elif has_alembic:
             command.upgrade(config, "head")

@@ -42,6 +42,7 @@ from passagen.assistant.planner import (
 )
 from passagen.assistant.retrieval import InMemorySectionRetrieval, RetrievedSection
 from passagen.assistant.schemas import (
+    DEFAULT_CONVERSATION_TITLE,
     ContextPlan,
     ContextSource,
     Conversation,
@@ -101,7 +102,7 @@ class ConversationService:
         return repository.create_conversation(
             self.database_path,
             paper_id=paper_id,
-            title=title or "New conversation",
+            title=title or DEFAULT_CONVERSATION_TITLE,
         )
 
     def list_conversations(self, paper_id: str) -> tuple[Conversation, ...]:
@@ -336,6 +337,7 @@ class ConversationService:
             record=record,
             answer_content=answer.answer_markdown,
             run_id=run_id,
+            conversation_title=_conversation_title(rewrite.conversation_title, conversation),
         )
         return record
 
@@ -628,3 +630,11 @@ def _rewrite_schema() -> str:
 
 def _answer_schema() -> str:
     return json.dumps(StructuredAnswer.model_json_schema(), ensure_ascii=False, indent=2)
+
+
+def _conversation_title(candidate: str | None, conversation: Conversation) -> str:
+    if candidate is not None:
+        title = " ".join(candidate.split()).strip("\"'")
+        if title:
+            return title[:80].rstrip()
+    return conversation.created_at[:16]

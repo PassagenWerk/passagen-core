@@ -21,6 +21,8 @@ from passagen.assistant.versions import (
     SNAPSHOT_SCHEMA_VERSION,
 )
 
+DEFAULT_CONVERSATION_TITLE = "New conversation"
+
 
 def _require_text(value: str) -> str:
     text = value.strip()

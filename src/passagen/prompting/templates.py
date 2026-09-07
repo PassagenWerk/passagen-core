@@ -87,7 +87,7 @@ class QaPromptTemplates:
 def load_qa_prompt_templates() -> QaPromptTemplates:
     return QaPromptTemplates(
         rewrite=load_prompt_template(
-            "qa-rewrite-v1.txt",
+            "qa-rewrite-v2.txt",
             None,
             variables={"schema", "history", "question"},
         ),

@@ -108,6 +108,28 @@ def test_initialize_creates_assistant_tables(tmp_path: Path) -> None:
         assert _tables(connection) >= ASSISTANT_TABLES
 
 
+def test_existing_default_conversation_titles_are_backfilled(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    config = _alembic_config(database_path)
+    command.upgrade(config, "0006")
+    with connect_database(database_path) as connection:
+        _insert_paper(connection)
+        connection.execute(
+            """
+            INSERT INTO conversations (id, paper_id, title, created_at)
+            VALUES ('conversation-1', 'paper-1', 'New conversation', '2026-09-08 14:32:01')
+            """
+        )
+
+    command.upgrade(config, "head")
+
+    with connect_database(database_path) as connection:
+        title = connection.execute(
+            "SELECT title FROM conversations WHERE id = 'conversation-1'"
+        ).fetchone()[0]
+    assert title == "2026-09-08 14:32"
+
+
 def test_conversation_requires_exactly_one_scope_target(tmp_path: Path) -> None:
     database_path = tmp_path / "passagen.db"
     initialize_database(database_path)

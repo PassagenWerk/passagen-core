@@ -289,3 +289,40 @@ def test_conversation_management(tmp_path: Path) -> None:
 
     service.delete_conversation(conversation.id)
     assert service.list_conversations("paper-1") == ()
+
+
+def test_first_successful_turn_titles_default_conversation(tmp_path: Path) -> None:
+    env = assistant_env(tmp_path)
+    service = assistant_service(env, FakeProvider(scripted_responder(env)))
+    conversation = service.create_conversation("paper-1")
+
+    service.ask(conversation.id, "具体数值是多少？")
+
+    assert service.get_conversation(conversation.id).conversation.title == "Latency workload"
+
+
+def test_conversation_title_uses_timestamp_when_rewrite_omits_title(tmp_path: Path) -> None:
+    env = assistant_env(tmp_path)
+    service = assistant_service(
+        env,
+        FakeProvider(scripted_responder(env, conversation_title=None)),
+    )
+    conversation = service.create_conversation("paper-1")
+
+    service.ask(conversation.id, "具体数值是多少？")
+
+    assert (
+        service.get_conversation(conversation.id).conversation.title == conversation.created_at[:16]
+    )
+
+
+def test_generated_title_does_not_overwrite_user_title(tmp_path: Path) -> None:
+    env = assistant_env(tmp_path)
+    service = assistant_service(env, FakeProvider(scripted_responder(env)))
+    conversation = service.create_conversation("paper-1")
+    submission = service.submit_turn(conversation.id, "具体数值是多少？")
+    service.rename_conversation(conversation.id, "My latency notes")
+
+    service.execute_turn(submission.run_id)
+
+    assert service.get_conversation(conversation.id).conversation.title == "My latency notes"

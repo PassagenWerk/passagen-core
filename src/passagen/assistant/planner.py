@@ -66,6 +66,7 @@ class RewriteResult(BaseModel):
     standalone_question: str
     retrieval_queries: list[str] = Field(default_factory=list)
     requires_exact_quote: bool = False
+    conversation_title: str | None = None
 
 
 def normalize_question(question: str) -> str:

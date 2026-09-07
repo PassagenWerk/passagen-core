@@ -186,6 +186,7 @@ def scripted_responder(
     first_answer: str | None = None,
     repair_answer: str | None = None,
     fail_rewrite: bool = False,
+    conversation_title: str | None = "Latency workload",
 ) -> Callable[[str], object]:
     answers = 0
     standalone = ""
@@ -206,6 +207,7 @@ def scripted_responder(
                     "standalone_question": standalone,
                     "retrieval_queries": ["latency workload"],
                     "requires_exact_quote": False,
+                    "conversation_title": conversation_title,
                 }
             )
         if "failed validation" in prompt:
