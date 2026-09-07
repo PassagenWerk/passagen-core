@@ -249,7 +249,8 @@ def test_grobid_client_posts_pdf_and_parses_tei_header(tmp_path: Path) -> None:
   <teiHeader>
     <fileDesc>
       <titleStmt>
-        <title>Structured <hi>Paper</hi> Title</title>
+        <title>Open access to the Proceedings of the 20th USENIX Symposium on Operating
+        Systems Design and Implementation is sponsored by Structured <hi>Paper</hi> Title</title>
       </titleStmt>
       <sourceDesc>
         <biblStruct>
@@ -494,6 +495,51 @@ def test_resolve_metadata_uses_grobid_when_local_identity_is_incomplete(
     assert result.paper.metadata_sources["venue"] == "grobid"
     assert crossref.identifiers == ["10.1000/grobid"]
     assert len(grobid.paths) == 1
+
+
+def test_resolve_metadata_prefers_complete_grobid_identity_when_local_authors_are_missing(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "inbox" / "osdi26-wang-jiawei.pdf"
+    write_pdf(
+        source_path,
+        "Paper body without an identifier",
+        title="Jiawei Wang, Ming Fu, and Haibo Chen, Huawei Research",
+        author="",
+    )
+    data_dir = tmp_path / "data"
+    database_path = data_dir / "passagen.db"
+    paper = scan_directory(
+        source_path.parent,
+        data_dir=data_dir,
+        database_path=database_path,
+    ).imported[0]
+
+    progress_events: list[str] = []
+    result = resolve_paper_metadata(
+        database_path,
+        data_dir,
+        paper.id,
+        MetadataSettings(),
+        ProvidersSettings(),
+        crossref=FakeLookup(error="must not be called"),
+        arxiv=FakeLookup(error="must not be called"),
+        grobid=FakePdfLookup(
+            BibliographicMetadata(
+                title="jwmalloc: A Verified Memory Allocator for Mobile Devices",
+                authors=("Jiawei Wang", "Ming Fu", "Haibo Chen"),
+                sources={"title": "grobid", "authors": "grobid"},
+            )
+        ),
+        progress=progress_events.append,
+    )
+
+    assert result.paper.title == "jwmalloc: A Verified Memory Allocator for Mobile Devices"
+    assert result.paper.authors == ("Jiawei Wang", "Ming Fu", "Haibo Chen")
+    assert result.paper.metadata_sources["title"] == "grobid"
+    assert result.paper.metadata_sources["authors"] == "grobid"
+    assert not result.warnings
+    assert "Local authors are missing; using the complete GROBID identity." in progress_events
 
 
 def test_resolve_metadata_rejects_grobid_publisher_cover_identity(tmp_path: Path) -> None:

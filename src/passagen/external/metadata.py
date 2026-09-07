@@ -12,6 +12,10 @@ from passagen.domain import BibliographicMetadata, normalize_arxiv_id, normalize
 
 _ATOM = "http://www.w3.org/2005/Atom"
 _ARXIV = "http://arxiv.org/schemas/atom"
+_GROBID_COVER_TITLE_PATTERN = re.compile(
+    r"^Open access to the Proceedings of .+? is sponsored by\s+",
+    re.IGNORECASE,
+)
 
 
 class MetadataLookupError(RuntimeError):
@@ -238,7 +242,7 @@ def _grobid_metadata(root: ET.Element) -> BibliographicMetadata:
         title_element = analytic.find("./tei:title[@type='main']", namespace)
     if title_element is None and analytic is not None:
         title_element = analytic.find("./tei:title", namespace)
-    title = _element_content(title_element)
+    title = normalize_grobid_title(_element_content(title_element))
     abstract = _element_content(
         root.find("./tei:teiHeader/tei:profileDesc/tei:abstract", namespace)
     )
@@ -355,6 +359,13 @@ def _clean_text(value: object) -> str | None:
         return None
     normalized = " ".join(value.split())
     return normalized or None
+
+
+def normalize_grobid_title(value: str | None) -> str | None:
+    title = _clean_text(value)
+    if title is None:
+        return None
+    return _clean_text(_GROBID_COVER_TITLE_PATTERN.sub("", title))
 
 
 def _year_from_text(value: str | None) -> int | None:

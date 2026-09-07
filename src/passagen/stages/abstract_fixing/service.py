@@ -226,6 +226,8 @@ def _validate_cleaned_abstract(raw: str, cleaned: str) -> None:
     cleaned_numbers = _NUMBER_PATTERN.findall(cleaned)
     if raw_numbers[: len(cleaned_numbers)] != cleaned_numbers:
         raise AbstractFixError("cleaned abstract added or changed a numeric value")
-    similarity = SequenceMatcher(None, raw.lower(), cleaned.lower()).ratio()
-    if similarity < 0.6:
+    matcher = SequenceMatcher(None, raw.lower(), cleaned.lower())
+    similarity = matcher.ratio()
+    source_coverage = sum(block.size for block in matcher.get_matching_blocks()) / len(cleaned)
+    if similarity < 0.6 and source_coverage < 0.8:
         raise AbstractFixError("cleaned abstract differs too much from the source text")

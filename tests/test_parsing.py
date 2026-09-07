@@ -65,7 +65,9 @@ def test_grobid_parser_health_and_tei_structure(tmp_path: Path) -> None:
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n%%EOF\n")
     tei = b"""<TEI xmlns="http://www.tei-c.org/ns/1.0">
-<teiHeader><fileDesc><titleStmt><title>GROBID Paper</title></titleStmt>
+<teiHeader><fileDesc><titleStmt><title>Open access to the Proceedings of the 20th USENIX
+Symposium on Operating Systems Design and Implementation is sponsored by GROBID Paper
+</title></titleStmt>
 <sourceDesc><biblStruct><analytic>
 <author><persName><forename>Ada</forename><surname>Lovelace</surname></persName></author>
 <idno type="DOI">10.1000/GROBID</idno></analytic>

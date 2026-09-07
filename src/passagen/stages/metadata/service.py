@@ -344,6 +344,18 @@ def _initial_grobid_fallback(
     progress: ProgressCallback | None,
 ) -> BibliographicMetadata:
     if not _titles_match(local.title, extracted.title):
+        if not local.authors and extracted.title is not None and extracted.authors:
+            logger.info(
+                "metadata GROBID identity preferred: local_title=%r grobid_title=%r "
+                "reason=local_authors_missing",
+                local.title,
+                extracted.title,
+            )
+            report_progress(
+                progress,
+                "Local authors are missing; using the complete GROBID identity.",
+            )
+            return extracted
         _reject_grobid_title("PDF", local.title, extracted.title, warnings, progress)
         return BibliographicMetadata()
     return _missing_metadata(local, extracted)

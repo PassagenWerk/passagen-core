@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from passagen.domain.identifiers import normalize_arxiv_id, normalize_doi
+from passagen.external.metadata import normalize_grobid_title
 from passagen.parsing.models import (
     ParsedMetadata,
     ParsedPaper,
@@ -79,13 +80,15 @@ class GrobidFulltextParser:
 
 
 def _tei_metadata(root: ET.Element) -> ParsedMetadata:
-    title = _content(root.find("./tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", _NS))
+    title = normalize_grobid_title(
+        _content(root.find("./tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", _NS))
+    )
     abstract = _content(root.find("./tei:teiHeader/tei:profileDesc/tei:abstract", _NS))
     analytic = root.find(
         "./tei:teiHeader/tei:fileDesc/tei:sourceDesc/tei:biblStruct/tei:analytic", _NS
     )
     if title is None and analytic is not None:
-        title = _content(analytic.find("./tei:title", _NS))
+        title = normalize_grobid_title(_content(analytic.find("./tei:title", _NS)))
     authors = tuple(
         _person_name(author) for author in root.findall(".//tei:titleStmt/tei:author", _NS)
     )

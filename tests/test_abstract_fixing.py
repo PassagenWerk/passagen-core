@@ -103,6 +103,35 @@ def test_abstract_fix_saves_validated_artifact_and_reuses_cache(tmp_path: Path) 
     assert provider.calls == 1
 
 
+def test_abstract_fix_allows_removing_large_trailing_table_leak(tmp_path: Path) -> None:
+    cleaned = (
+        "The allocator reduces CPU overhead while retaining the original memory footprint. "
+        "It has been deployed successfully across production mobile devices."
+    )
+    leaked_table = (
+        " Benchmark ID Action app_market Open the app market and install an application."
+        " browser Open a browser, enter a URL, and scroll the page."
+        " camera Open the camera, switch to video mode, and start recording."
+    )
+    raw = cleaned + leaked_table
+    database_path, data_dir, paper_id = setup_abstract(tmp_path, raw)
+    provider = FakeProvider(
+        [json.dumps({"cleaned_abstract": cleaned, "corrections": ["Removed leaked table"]})]
+    )
+
+    result = fix_paper_abstract(
+        database_path,
+        data_dir,
+        paper_id,
+        LlmSettings(),
+        AbstractFixingSettings(),
+        provider=provider,
+    )
+
+    assert result.cleaned is not None
+    assert result.cleaned.cleaned_abstract == cleaned
+
+
 def test_abstract_fix_rejects_changed_numeric_values(tmp_path: Path) -> None:
     raw = "The evaluation reports 17.2% higher throughput while preserving every original claim."
     database_path, data_dir, paper_id = setup_abstract(tmp_path, raw)
