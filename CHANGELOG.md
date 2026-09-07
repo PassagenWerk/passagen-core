@@ -4,8 +4,29 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Answer generation now routes schema validation failures (for example a citation without a
+  summary path, section, or page locator) through the same bounded repair pass as citation
+  content failures instead of failing the turn immediately; the QA answer/repair prompts (v2)
+  explicitly require per-artifact-kind locators, repair receives the allowed source context,
+  and `QA_PROMPT_VERSION` is now `2`.
+- Turn submission now persists its run and adjacent user/assistant messages in one transaction;
+  queued turns cannot consume later questions as conversation history, and run claiming uses one
+  conditional database update.
+- Service restart recovery now marks pending answer messages failed alongside interrupted runs,
+  archive search includes tags, model-returned question/intent metadata is normalized to the
+  planner result, and answer/repair calls enforce their configured context budget.
+
 ### Added
 
+- `passagen.assistant` asynchronous turn execution for the Web adapter (Phase 2 support):
+  `submit_turn` persists the question and queues a generation run, `execute_turn` runs a queued
+  or claimed turn from its submission-time source snapshot, `claim_next_queued_run` backs the
+  single-worker runner, and leftover active runs can be marked interrupted on startup.
+- `passagen.assistant` structured QA archive: archive/unarchive with title and tags, LIKE-escaped
+  search over question, answer, and archive metadata, full structured JSON export, and per-run
+  generation LLM call listing for token summaries.
 - `passagen.assistant` single-paper conversation service (Phase 1 of the collection research and
   exploration roadmap): persistent conversations and messages, LLM question rewriting with
   English retrieval queries, deterministic context routing across conversation history, Summary,

@@ -92,14 +92,14 @@ def load_qa_prompt_templates() -> QaPromptTemplates:
             variables={"schema", "history", "question"},
         ),
         answer=load_prompt_template(
-            "qa-answer-v1.txt",
+            "qa-answer-v2.txt",
             None,
             variables={"schema", "question", "context"},
         ),
         repair=load_prompt_template(
-            "qa-repair-v1.txt",
+            "qa-repair-v2.txt",
             None,
-            variables={"schema", "validation_error", "candidate"},
+            variables={"schema", "question", "context", "validation_error", "candidate"},
         ),
     )
 

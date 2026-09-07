@@ -24,7 +24,7 @@ from passagen.stages.summarization.schema import StructuredSummary
 _HISTORY_SHARE = 0.15
 _SUMMARY_SHARE = 0.45
 _OUTLINE_SHARE = 0.20
-_RAW_SHARE = 0.45
+_RAW_SHARE = 0.40
 
 
 @dataclass(frozen=True, slots=True)

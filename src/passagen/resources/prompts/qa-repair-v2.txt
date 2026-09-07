@@ -1,0 +1,25 @@
+The following JSON answer failed validation.
+
+Validation error:
+$validation_error
+
+Return a corrected JSON object that matches this schema:
+$schema
+
+The standalone question is:
+<question>
+$question
+</question>
+
+The only allowed evidence is:
+<sources>
+$context
+</sources>
+
+Rules:
+- Only use citation metadata and locators supported by these source headers and contents; never invent new artifact hashes, sections, paths, or page numbers.
+- Every citation must include a locator: summary_path for summary_json, section for outline_md, section and pages with an exact excerpt for extracted_json.
+- Remove claims that cannot be supported instead of fabricating citations or locators.
+
+Candidate JSON:
+$candidate

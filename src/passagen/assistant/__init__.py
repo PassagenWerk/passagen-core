@@ -3,6 +3,7 @@
 from passagen.assistant.errors import (
     AnswerValidationError,
     AssistantError,
+    AssistantNotFoundError,
     CitationValidationError,
     ContextPlanError,
     InsufficientEvidenceError,
@@ -10,7 +11,7 @@ from passagen.assistant.errors import (
     ScopeError,
     StaleSourceError,
 )
-from passagen.assistant.models import AssistantTurn, ConversationDetail
+from passagen.assistant.models import AssistantTurn, ConversationDetail, TurnSubmission
 from passagen.assistant.schemas import (
     AnswerClaim,
     AnswerKind,
@@ -57,6 +58,7 @@ __all__ = [
     "AnswerValidationError",
     "ArtifactRef",
     "AssistantError",
+    "AssistantNotFoundError",
     "AssistantTurn",
     "Citation",
     "CitationArtifactKind",
@@ -84,5 +86,6 @@ __all__ = [
     "SourceSnapshot",
     "StaleSourceError",
     "StructuredAnswer",
+    "TurnSubmission",
     "source_fingerprint",
 ]

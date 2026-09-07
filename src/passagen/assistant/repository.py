@@ -39,6 +39,10 @@ class ConversationNotFoundError(KeyError):
     pass
 
 
+class QaRecordNotFoundError(KeyError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationRunRecord:
     id: str
@@ -48,11 +52,25 @@ class GenerationRunRecord:
     collection_id: str | None
     conversation_id: str | None
     qa_record_id: str | None
+    source_snapshot_json: str | None
     error_code: str | None
     error_message: str | None
     created_at: str
     started_at: str | None
     completed_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationLlmCallRecord:
+    id: str
+    stage: str
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    finish_reason: str | None
+    error_message: str | None
+    created_at: str
 
 
 def create_conversation(database_path: Path, *, paper_id: str, title: str) -> Conversation:
@@ -152,6 +170,7 @@ def create_generation_run(
     collection_id: str | None = None,
     conversation_id: str | None = None,
     source_snapshot_json: str | None = None,
+    status: str = "running",
 ) -> str:
     run_id = str(uuid.uuid4())
     with session_scope(database_path) as session:
@@ -162,18 +181,119 @@ def create_generation_run(
                 paper_id=paper_id,
                 collection_id=collection_id,
                 conversation_id=conversation_id,
-                status="running",
+                status=status,
                 source_snapshot_json=source_snapshot_json,
-                started_at=_now(session),
+                started_at=_now(session) if status == "running" else None,
             )
         )
     return run_id
+
+
+def create_turn_submission(
+    database_path: Path,
+    *,
+    kind: str,
+    paper_id: str,
+    conversation_id: str,
+    source_snapshot_json: str,
+    question: str,
+) -> tuple[str, Message, Message]:
+    """Atomically persist a queued run and its adjacent user/assistant messages."""
+
+    run_id = str(uuid.uuid4())
+    question_message_id = str(uuid.uuid4())
+    answer_message_id = str(uuid.uuid4())
+    with session_scope(database_path) as session:
+        session.add(
+            GenerationRunRow(
+                id=run_id,
+                kind=kind,
+                paper_id=paper_id,
+                conversation_id=conversation_id,
+                status="queued",
+                source_snapshot_json=source_snapshot_json,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                ConversationMessageRow(
+                    id=question_message_id,
+                    conversation_id=conversation_id,
+                    role=MessageRole.USER.value,
+                    content=question,
+                    status=MessageStatus.COMPLETED.value,
+                ),
+                ConversationMessageRow(
+                    id=answer_message_id,
+                    conversation_id=conversation_id,
+                    role=MessageRole.ASSISTANT.value,
+                    content="",
+                    status=MessageStatus.PENDING.value,
+                    run_id=run_id,
+                ),
+            ]
+        )
+        session.flush()
+        question_row = session.get(ConversationMessageRow, question_message_id)
+        answer_row = session.get(ConversationMessageRow, answer_message_id)
+        if question_row is None or answer_row is None:
+            raise RuntimeError(f"Failed to persist turn submission {run_id}")
+        return run_id, _message(question_row), _message(answer_row)
+
+
+def claim_next_queued_run(database_path: Path) -> GenerationRunRecord | None:
+    """Atomically move the oldest queued run to running; used by the single worker."""
+
+    with session_scope(database_path) as session:
+        candidate_id = (
+            select(GenerationRunRow)
+            .where(GenerationRunRow.status == "queued")
+            .order_by(GenerationRunRow.created_at, GenerationRunRow.id)
+            .limit(1)
+            .with_only_columns(GenerationRunRow.id)
+            .scalar_subquery()
+        )
+        row = session.scalars(
+            update(GenerationRunRow)
+            .where(
+                GenerationRunRow.id == candidate_id,
+                GenerationRunRow.status == "queued",
+            )
+            .values(status="running", started_at=func.current_timestamp())
+            .returning(GenerationRunRow)
+        ).one_or_none()
+        if row is None:
+            return None
+        return _generation_run(row)
+
+
+def get_message_by_run(database_path: Path, run_id: str) -> Message | None:
+    with session_scope(database_path) as session:
+        row = session.scalar(
+            select(ConversationMessageRow).where(ConversationMessageRow.run_id == run_id)
+        )
+        return _message(row) if row is not None else None
 
 
 def get_generation_run(database_path: Path, run_id: str) -> GenerationRunRecord | None:
     with session_scope(database_path) as session:
         row = session.get(GenerationRunRow, run_id)
         return _generation_run(row) if row is not None else None
+
+
+def start_generation_run(database_path: Path, run_id: str) -> GenerationRunRecord:
+    """Move a queued run to running; direct (non-worker) execution entry point."""
+
+    with session_scope(database_path) as session:
+        row = session.get(GenerationRunRow, run_id)
+        if row is None:
+            raise ConversationNotFoundError(f"Generation run not found: {run_id}")
+        if row.status == "queued":
+            row.status = "running"
+            row.started_at = _now(session)
+            session.flush()
+        return _generation_run(row)
 
 
 def fail_turn(
@@ -295,6 +415,14 @@ def get_qa_record(database_path: Path, qa_record_id: str) -> QaRecord | None:
         return _qa_record(row) if row is not None else None
 
 
+def get_qa_record_by_answer_message(database_path: Path, answer_message_id: str) -> QaRecord | None:
+    with session_scope(database_path) as session:
+        row = session.scalar(
+            select(QaRecordRow).where(QaRecordRow.answer_message_id == answer_message_id)
+        )
+        return _qa_record(row) if row is not None else None
+
+
 def list_qa_records(database_path: Path, conversation_id: str) -> tuple[QaRecord, ...]:
     with session_scope(database_path) as session:
         rows = session.scalars(
@@ -305,14 +433,116 @@ def list_qa_records(database_path: Path, conversation_id: str) -> tuple[QaRecord
         return tuple(_qa_record(row) for row in rows)
 
 
+def update_qa_record_archive(
+    database_path: Path,
+    qa_record_id: str,
+    *,
+    archived: bool,
+    title: str | None = None,
+    tags: list[str] | None = None,
+) -> QaRecord:
+    with session_scope(database_path) as session:
+        row = session.get(QaRecordRow, qa_record_id)
+        if row is None:
+            raise QaRecordNotFoundError(f"QA record not found: {qa_record_id}")
+        row.archived_at = _now(session) if archived else None
+        if archived:
+            row.archive_title = title
+            row.archive_tags_json = json.dumps(tags or [], ensure_ascii=False)
+        else:
+            row.archive_title = None
+            row.archive_tags_json = None
+        session.flush()
+        return _qa_record(row)
+
+
+def search_qa_records(
+    database_path: Path,
+    *,
+    query: str | None = None,
+    archived: bool | None = None,
+    paper_id: str | None = None,
+    limit: int = 50,
+) -> tuple[QaRecord, ...]:
+    with session_scope(database_path) as session:
+        statement = select(QaRecordRow)
+        if paper_id is not None:
+            statement = statement.join(
+                ConversationRow, ConversationRow.id == QaRecordRow.conversation_id
+            ).where(ConversationRow.paper_id == paper_id)
+        if archived is not None:
+            statement = statement.where(
+                QaRecordRow.archived_at.is_not(None)
+                if archived
+                else QaRecordRow.archived_at.is_(None)
+            )
+        if query and query.strip():
+            pattern = f"%{_escape_like(query.strip())}%"
+            statement = statement.where(
+                QaRecordRow.standalone_question.like(pattern, escape="\\")
+                | QaRecordRow.answer_json.like(pattern, escape="\\")
+                | QaRecordRow.archive_title.like(pattern, escape="\\")
+                | QaRecordRow.archive_tags_json.like(pattern, escape="\\")
+            )
+        rows = session.scalars(
+            statement.order_by(QaRecordRow.created_at.desc(), QaRecordRow.id).limit(limit)
+        ).all()
+        return tuple(_qa_record(row) for row in rows)
+
+
+def list_generation_llm_calls(
+    database_path: Path, run_id: str
+) -> tuple[GenerationLlmCallRecord, ...]:
+    with session_scope(database_path) as session:
+        rows = session.scalars(
+            select(GenerationLlmCallRow)
+            .where(GenerationLlmCallRow.generation_run_id == run_id)
+            .order_by(text("rowid"))
+        ).all()
+        return tuple(
+            GenerationLlmCallRecord(
+                id=row.id,
+                stage=row.stage,
+                provider=row.provider,
+                model=row.model,
+                input_tokens=row.input_tokens,
+                output_tokens=row.output_tokens,
+                finish_reason=row.finish_reason,
+                error_message=row.error_message,
+                created_at=row.created_at,
+            )
+            for row in rows
+        )
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def interrupt_active_generation_runs(database_path: Path) -> int:
     """Mark queued/running runs as interrupted after a process restart."""
 
     with session_scope(database_path) as session:
+        active_run_ids = select(GenerationRunRow.id).where(
+            GenerationRunRow.status.in_(("queued", "running"))
+        )
+        session.execute(
+            update(ConversationMessageRow)
+            .where(
+                ConversationMessageRow.run_id.in_(active_run_ids),
+                ConversationMessageRow.status == MessageStatus.PENDING.value,
+            )
+            .values(status=MessageStatus.FAILED.value)
+        )
         result = session.execute(
             update(GenerationRunRow)
             .where(GenerationRunRow.status.in_(("queued", "running")))
-            .values(status="interrupted", completed_at=func.current_timestamp())
+            .values(
+                status="interrupted",
+                error_code="interrupted",
+                error_message="Generation interrupted by service restart",
+                completed_at=func.current_timestamp(),
+            )
         )
         if not isinstance(result, CursorResult):
             return 0
@@ -380,6 +610,7 @@ def _generation_run(row: GenerationRunRow) -> GenerationRunRecord:
         collection_id=row.collection_id,
         conversation_id=row.conversation_id,
         qa_record_id=row.qa_record_id,
+        source_snapshot_json=row.source_snapshot_json,
         error_code=row.error_code,
         error_message=row.error_message,
         created_at=row.created_at,

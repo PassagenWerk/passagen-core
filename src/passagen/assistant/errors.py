@@ -54,3 +54,9 @@ class ProviderCallError(AssistantError):
     """The LLM provider failed or returned unusable content for a generation call."""
 
     code = "provider_error"
+
+
+class AssistantNotFoundError(AssistantError):
+    """A conversation, turn, run, or QA record does not exist."""
+
+    code = "not_found"

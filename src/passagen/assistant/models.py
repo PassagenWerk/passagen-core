@@ -14,6 +14,14 @@ class ConversationDetail:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnSubmission:
+    conversation_id: str
+    run_id: str
+    question_message: Message
+    answer_message: Message
+
+
+@dataclass(frozen=True, slots=True)
 class AssistantTurn:
     conversation_id: str
     run_id: str

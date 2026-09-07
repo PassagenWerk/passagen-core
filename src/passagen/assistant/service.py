@@ -27,12 +27,13 @@ from passagen.assistant.context import (
 from passagen.assistant.errors import (
     AnswerValidationError,
     AssistantError,
+    AssistantNotFoundError,
     CitationValidationError,
     ContextPlanError,
     ProviderCallError,
     ScopeError,
 )
-from passagen.assistant.models import AssistantTurn, ConversationDetail
+from passagen.assistant.models import AssistantTurn, ConversationDetail, TurnSubmission
 from passagen.assistant.planner import (
     RewriteResult,
     deterministic_plan,
@@ -72,6 +73,7 @@ logger = logging.getLogger(__name__)
 
 _HISTORY_LIMIT = 10
 _MAX_RAW_SECTIONS = 3
+_REPAIR_ERROR_RESERVE_TOKENS = 512
 
 
 class ConversationService:
@@ -108,7 +110,7 @@ class ConversationService:
     def get_conversation(self, conversation_id: str) -> ConversationDetail:
         conversation = repository.get_conversation(self.database_path, conversation_id)
         if conversation is None:
-            raise ScopeError(f"Conversation not found: {conversation_id}")
+            raise AssistantNotFoundError(f"Conversation not found: {conversation_id}")
         messages = repository.list_messages(self.database_path, conversation_id)
         return ConversationDetail(conversation, messages)
 
@@ -120,43 +122,120 @@ class ConversationService:
                 self.database_path, conversation_id, title.strip()
             )
         except repository.ConversationNotFoundError as exc:
-            raise ScopeError(f"Conversation not found: {conversation_id}") from exc
+            raise AssistantNotFoundError(f"Conversation not found: {conversation_id}") from exc
 
     def delete_conversation(self, conversation_id: str) -> None:
         repository.delete_conversation(self.database_path, conversation_id)
 
+    def get_qa_record(self, qa_record_id: str) -> QaRecord:
+        record = repository.get_qa_record(self.database_path, qa_record_id)
+        if record is None:
+            raise AssistantNotFoundError(f"QA record not found: {qa_record_id}")
+        return record
+
+    def archive_qa_record(
+        self, qa_record_id: str, *, title: str, tags: list[str] | None = None
+    ) -> QaRecord:
+        if not title.strip():
+            raise ScopeError("Archive title must not be blank")
+        clean_tags = [tag.strip() for tag in tags or [] if tag.strip()]
+        try:
+            return repository.update_qa_record_archive(
+                self.database_path,
+                qa_record_id,
+                archived=True,
+                title=title.strip(),
+                tags=clean_tags,
+            )
+        except repository.QaRecordNotFoundError as exc:
+            raise AssistantNotFoundError(f"QA record not found: {qa_record_id}") from exc
+
+    def unarchive_qa_record(self, qa_record_id: str) -> QaRecord:
+        try:
+            return repository.update_qa_record_archive(
+                self.database_path, qa_record_id, archived=False
+            )
+        except repository.QaRecordNotFoundError as exc:
+            raise AssistantNotFoundError(f"QA record not found: {qa_record_id}") from exc
+
+    def search_qa_records(
+        self,
+        query: str | None = None,
+        *,
+        archived: bool | None = None,
+        paper_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[QaRecord, ...]:
+        return repository.search_qa_records(
+            self.database_path, query=query, archived=archived, paper_id=paper_id, limit=limit
+        )
+
+    def claim_next_queued_run(self) -> repository.GenerationRunRecord | None:
+        return repository.claim_next_queued_run(self.database_path)
+
+    def get_generation_run(self, run_id: str) -> repository.GenerationRunRecord:
+        run = repository.get_generation_run(self.database_path, run_id)
+        if run is None:
+            raise AssistantNotFoundError(f"Generation run not found: {run_id}")
+        return run
+
+    def find_generation_run(self, run_id: str) -> repository.GenerationRunRecord | None:
+        return repository.get_generation_run(self.database_path, run_id)
+
+    def find_qa_record_for_message(self, answer_message_id: str) -> QaRecord | None:
+        return repository.get_qa_record_by_answer_message(self.database_path, answer_message_id)
+
+    def list_generation_llm_calls(
+        self, run_id: str
+    ) -> tuple[repository.GenerationLlmCallRecord, ...]:
+        self.get_generation_run(run_id)
+        return repository.list_generation_llm_calls(self.database_path, run_id)
+
+    def interrupt_active_runs(self) -> int:
+        return repository.interrupt_active_generation_runs(self.database_path)
+
     def ask(self, conversation_id: str, question: str) -> AssistantTurn:
+        submission = self.submit_turn(conversation_id, question)
+        return self.execute_turn(submission.run_id)
+
+    def submit_turn(self, conversation_id: str, question: str) -> TurnSubmission:
+        """Persist the user question and queue an answer run without executing it."""
+
         if not question.strip():
             raise ScopeError("Question must not be blank")
         conversation = repository.get_conversation(self.database_path, conversation_id)
         if conversation is None:
-            raise ScopeError(f"Conversation not found: {conversation_id}")
+            raise AssistantNotFoundError(f"Conversation not found: {conversation_id}")
         if conversation.scope is not ConversationScope.PAPER or conversation.paper_id is None:
             raise ScopeError("Collection conversations are not supported yet")
         snapshot = build_paper_snapshot(self.database_path, conversation.paper_id)
-        run_id = repository.create_generation_run(
+        run_id, question_message, answer_message = repository.create_turn_submission(
             self.database_path,
             kind=GenerationRunKind.ANSWER.value,
             paper_id=conversation.paper_id,
             conversation_id=conversation_id,
             source_snapshot_json=snapshot.model_dump_json(),
+            question=question.strip(),
         )
-        question_message = repository.add_message(
-            self.database_path,
-            conversation_id,
-            role=MessageRole.USER,
-            content=question.strip(),
-            status=MessageStatus.COMPLETED,
-        )
-        answer_message = repository.add_message(
-            self.database_path,
-            conversation_id,
-            role=MessageRole.ASSISTANT,
-            content="",
-            status=MessageStatus.PENDING,
-            run_id=run_id,
-        )
+        return TurnSubmission(conversation_id, run_id, question_message, answer_message)
+
+    def execute_turn(self, run_id: str) -> AssistantTurn:
+        """Execute a queued or claimed answer run; used directly and by the worker."""
+
+        run = repository.start_generation_run(self.database_path, run_id)
+        if run.status != "running" or run.conversation_id is None:
+            raise ScopeError(f"Generation run {run_id} is not executable (status={run.status})")
+        conversation = repository.get_conversation(self.database_path, run.conversation_id)
+        if conversation is None:
+            raise AssistantNotFoundError(f"Conversation not found: {run.conversation_id}")
+        answer_message = repository.get_message_by_run(self.database_path, run_id)
+        if answer_message is None:
+            raise AssistantNotFoundError(f"No pending answer message for run {run_id}")
+        question_message = self._question_message_for(run.conversation_id, answer_message.id)
+        if run.source_snapshot_json is None:
+            raise ScopeError(f"Generation run {run_id} has no source snapshot")
         try:
+            snapshot = SourceSnapshot.model_validate_json(run.source_snapshot_json)
             record = self._run_turn(
                 conversation, snapshot, run_id, question_message, answer_message
             )
@@ -170,15 +249,25 @@ class ConversationService:
                 error_message=str(exc),
             )
             raise
-        completed = repository.list_messages(self.database_path, conversation_id)
+        completed = repository.list_messages(self.database_path, run.conversation_id)
         by_id = {message.id: message for message in completed}
         return AssistantTurn(
-            conversation_id=conversation_id,
+            conversation_id=run.conversation_id,
             run_id=run_id,
             question_message=by_id[question_message.id],
             answer_message=by_id[answer_message.id],
             qa_record=record,
         )
+
+    def _question_message_for(self, conversation_id: str, answer_message_id: str) -> Message:
+        messages = repository.list_messages(self.database_path, conversation_id)
+        for index, message in enumerate(messages):
+            if message.id == answer_message_id and index > 0:
+                candidate = messages[index - 1]
+                if candidate.role is MessageRole.USER:
+                    return candidate
+                break
+        raise AssistantNotFoundError(f"No user question found before message {answer_message_id}")
 
     def _run_turn(
         self,
@@ -202,9 +291,15 @@ class ConversationService:
             available_sources=available,
         )
         evidence = self._load_evidence(paper, plan)
-        overhead = self.budget.estimate_tokens(
-            prompts.answer.content + _answer_schema() + plan.standalone_question
+        base_prompt_tokens = max(
+            self.budget.estimate_tokens(
+                prompts.answer.content + _answer_schema() + plan.standalone_question
+            ),
+            self.budget.estimate_tokens(
+                prompts.repair.content + _answer_schema() + plan.standalone_question
+            ),
         )
+        overhead = base_prompt_tokens + self.answer_max_output_tokens + _REPAIR_ERROR_RESERVE_TOKENS
         sections = self._retrieve(paper, plan, evidence.parsed, overhead)
         context = build_context(
             snapshot=paper,
@@ -246,10 +341,14 @@ class ConversationService:
 
     def _recent_history(self, conversation_id: str, *, before_id: str) -> list[Message]:
         messages = repository.list_messages(self.database_path, conversation_id)
+        before_index = next(
+            (index for index, message in enumerate(messages) if message.id == before_id),
+            len(messages),
+        )
         history = [
             message
-            for message in messages
-            if message.id != before_id and message.status is MessageStatus.COMPLETED
+            for message in messages[:before_index]
+            if message.status is MessageStatus.COMPLETED
         ]
         return history[-_HISTORY_LIMIT:]
 
@@ -376,43 +475,56 @@ class ConversationService:
             initial_max_tokens=self.answer_max_output_tokens,
             is_valid=is_valid,
         )
-        answer = self._parse_answer(response.content)
         try:
+            answer = self._canonicalize_answer(self._parse_answer(response.content), plan)
             validate_answer_citations(answer, evidence)
+            return answer
         except (CitationValidationError, AnswerValidationError) as exc:
-            answer = self._repair_answer(prompts, run_id, answer, str(exc), evidence)
-        return answer
+            return self._repair_answer(
+                prompts, run_id, response.content, str(exc), plan, context, evidence
+            )
 
     def _repair_answer(
         self,
         prompts: QaPromptTemplates,
         run_id: str,
-        candidate: StructuredAnswer,
+        candidate_content: str,
         validation_error: str,
+        plan: ContextPlan,
+        context: AssembledContext,
         evidence: PaperEvidenceIndex,
     ) -> StructuredAnswer:
         prompt = prompts.repair.render(
             schema=_answer_schema(),
+            question=plan.standalone_question,
+            context=context.render(),
             validation_error=validation_error,
-            candidate=candidate.model_dump_json(),
+            candidate=candidate_content,
         )
         response = self._call_llm(
             run_id, GenerationStage.REPAIR, prompt, max_tokens=self.answer_max_output_tokens
         )
-        repaired = self._parse_answer(response.content)
+        repaired = self._canonicalize_answer(self._parse_answer(response.content), plan)
         try:
             validate_answer_citations(repaired, evidence)
         except (CitationValidationError, AnswerValidationError) as exc:
             raise AnswerValidationError(
-                f"Answer failed citation validation after one repair: {exc}"
+                f"Answer failed validation after one repair: {exc}"
             ) from exc
         return repaired
+
+    @staticmethod
+    def _canonicalize_answer(answer: StructuredAnswer, plan: ContextPlan) -> StructuredAnswer:
+        return answer.model_copy(
+            update={"standalone_question": plan.standalone_question, "intent": plan.intent}
+        )
 
     def _parse_answer(self, content: str) -> StructuredAnswer:
         try:
             return StructuredAnswer.model_validate_json(content)
         except ValidationError as exc:
-            raise AnswerValidationError(f"Answer failed schema validation: {exc}") from exc
+            detail = exc.json(include_input=False)
+            raise AnswerValidationError(f"Answer failed schema validation: {detail}") from exc
 
     def _call_llm(
         self,
@@ -422,6 +534,10 @@ class ConversationService:
         *,
         max_tokens: int,
     ) -> LlmResponse:
+        if not self.budget.fits(prompt, max_tokens):
+            raise ContextPlanError(
+                f"{stage.value} prompt exceeds the configured LLM context budget"
+            )
         provider = self.provider
         if provider is None:
             provider = OpenAICompatibleProvider(self.settings)
