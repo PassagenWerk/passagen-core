@@ -10,5 +10,5 @@ Roadmap 按交付状态分类。`completed/` 记录当前已经存在并持续�
 
 ## 计划中
 
-- [Collection 研究与探索](planned/collection-research-and-exploration.md)
+- [Paper 与 Collection 研究、问答及探索](planned/collection-research-and-exploration.md)
 - [会议论文发现与筛选](planned/discovery-and-screening.md)

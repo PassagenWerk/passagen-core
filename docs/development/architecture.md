@@ -31,6 +31,7 @@ passagen-cli        passagen-web
 | `stages/` | 单篇 stage、update 编排、前置条件、校验和 artifact 提交。 |
 | `processing/` | 持久化 run、冲突控制、worker-facing execution 和 progress event。 |
 | `catalog/` | 论文、Tag、Collection 和 artifact 的入口无关应用 API。 |
+| `assistant/` | 持久化对话问答 contract：Conversation/QaRecord/Citation/SourceSnapshot/ContextPlan Schema、稳定错误、版本常量和离线评估问题集。 |
 
 ## Public Boundaries
 

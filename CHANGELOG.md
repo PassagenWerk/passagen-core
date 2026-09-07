@@ -4,6 +4,27 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `passagen.assistant` single-paper conversation service (Phase 1 of the collection research and
+  exploration roadmap): persistent conversations and messages, LLM question rewriting with
+  English retrieval queries, deterministic context routing across conversation history, Summary,
+  Outline, and raw sections, in-memory lexical section retrieval behind a swappable protocol,
+  token-budgeted context assembly, structured answers with citation validation and one bounded
+  repair, atomic turn persistence, per-stage `generation_llm_calls` accounting, and prompt /
+  response / error diagnostics under `data/runs/<run-id>/llm/<call-id>/`. Failed turns keep the
+  user question visible, never persist half an answer, and can be retried; leftover active
+  generation runs are markable as interrupted on restart.
+- `passagen.assistant`: versioned contracts for persistent paper/collection question answering
+  (Phase 0 of the collection research and exploration roadmap) — Conversation, Message,
+  QaRecord, Citation, SourceSnapshot, ContextPlan, and StructuredAnswer schemas with citation
+  and scope validation, canonical source fingerprints, stable error codes, prompt/schema/
+  retrieval version constants, and a local evaluation question set that never calls a real LLM.
+- Schema version 6 storage for the assistant domain: `conversations`,
+  `conversation_messages`, `qa_records`, `qa_citations`, `generation_runs`, and
+  `generation_llm_calls` tables with scope checks, unique message linkage, page-range checks,
+  and cascading deletes.
+
 ## [0.5.0] - 2026-09-05
 
 ### Added

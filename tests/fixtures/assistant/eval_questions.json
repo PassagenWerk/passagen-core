@@ -1,0 +1,83 @@
+{
+  "schema_version": "1",
+  "questions": [
+    {
+      "id": "paper-overview-01",
+      "scope": "paper",
+      "question": "这篇论文要解决什么问题，主要贡献是什么？",
+      "expected_intent": "overview",
+      "expected_sources": ["summary"],
+      "notes": "High-level problem/contribution questions are answered from the validated summary."
+    },
+    {
+      "id": "paper-overview-02",
+      "scope": "paper",
+      "question": "What are the limitations and overall conclusions of the paper?",
+      "expected_intent": "overview",
+      "expected_sources": ["summary"]
+    },
+    {
+      "id": "paper-structure-01",
+      "scope": "paper",
+      "question": "文章是怎么组织的？评估部分在哪一节？",
+      "expected_intent": "structure",
+      "expected_sources": ["outline"]
+    },
+    {
+      "id": "paper-fact-01",
+      "scope": "paper",
+      "question": "延迟实验使用的是什么 workload，具体数值是多少？",
+      "expected_intent": "fact_lookup",
+      "expected_sources": ["summary", "raw"],
+      "notes": "Exact numbers escalate from summary to raw sections when the summary lacks them."
+    },
+    {
+      "id": "paper-fact-02",
+      "scope": "paper",
+      "question": "Quote the exact cache eviction policy described in the implementation.",
+      "expected_intent": "fact_lookup",
+      "expected_sources": ["raw"],
+      "notes": "Exact quotes require raw sections and must carry page locators."
+    },
+    {
+      "id": "paper-explanation-01",
+      "scope": "paper",
+      "question": "解释一下它的调度设计是如何降低尾延迟的。",
+      "expected_intent": "explanation",
+      "expected_sources": ["summary", "raw"],
+      "notes": "Single-paper synthesis combines the summary with selected raw sections."
+    },
+    {
+      "id": "paper-followup-01",
+      "scope": "paper",
+      "question": "那它的第二个实验呢？",
+      "history": ["这篇论文做了哪些实验？"],
+      "expected_intent": "fact_lookup",
+      "expected_sources": ["conversation", "summary", "raw"],
+      "notes": "Follow-up questions require recent history and a rewritten standalone question."
+    },
+    {
+      "id": "paper-duplicate-01",
+      "scope": "paper",
+      "question": "这篇论文的主要贡献是什么？",
+      "expected_intent": "overview",
+      "expected_sources": ["previous_qa"],
+      "notes": "An already-answered equivalent question reuses the previous QA record when the source fingerprint matches."
+    },
+    {
+      "id": "collection-synthesis-01",
+      "scope": "collection",
+      "question": "这些论文共同关注哪些主题，高层差异是什么？",
+      "expected_intent": "synthesis",
+      "expected_sources": ["collection_summary"]
+    },
+    {
+      "id": "collection-comparison-01",
+      "scope": "collection",
+      "question": "对比这些论文的实验设计和主要结果。",
+      "expected_intent": "comparison",
+      "expected_sources": ["collection_summary", "paper_summaries", "raw"],
+      "notes": "Detailed multi-paper comparison combines synthesis, per-paper summaries, and selected raw evidence."
+    }
+  ]
+}

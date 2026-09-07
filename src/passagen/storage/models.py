@@ -201,3 +201,191 @@ class CollectionPaperRow(Base):
     added_at: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class ConversationRow(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        CheckConstraint("(paper_id IS NULL) <> (collection_id IS NULL)"),
+        Index("ix_conversations_paper_id", "paper_id"),
+        Index("ix_conversations_collection_id", "collection_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    paper_id: Mapped[str | None] = mapped_column(Text, ForeignKey("papers.id", ondelete="CASCADE"))
+    collection_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("collections.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    messages: Mapped[list[ConversationMessageRow]] = relationship(
+        back_populates="conversation", passive_deletes=True
+    )
+    qa_records: Mapped[list[QaRecordRow]] = relationship(
+        back_populates="conversation", passive_deletes=True
+    )
+
+
+class ConversationMessageRow(Base):
+    __tablename__ = "conversation_messages"
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant')"),
+        CheckConstraint("status IN ('pending', 'completed', 'failed')"),
+        Index("ix_conversation_messages_conversation_id", "conversation_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("generation_runs.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    conversation: Mapped[ConversationRow] = relationship(back_populates="messages")
+
+
+class QaRecordRow(Base):
+    __tablename__ = "qa_records"
+    __table_args__ = (
+        Index("ix_qa_records_conversation_id", "conversation_id"),
+        Index("ix_qa_records_normalized_question_hash", "normalized_question_hash"),
+        Index("ix_qa_records_archived_at", "archived_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    question_message_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("conversation_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    answer_message_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("conversation_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    standalone_question: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_question: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_question_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str] = mapped_column(Text, nullable=False)
+    context_plan_json: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_schema_version: Mapped[str] = mapped_column(Text, nullable=False)
+    archived_at: Mapped[str | None] = mapped_column(Text)
+    archive_title: Mapped[str | None] = mapped_column(Text)
+    archive_tags_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    conversation: Mapped[ConversationRow] = relationship(back_populates="qa_records")
+    citations: Mapped[list[QaCitationRow]] = relationship(
+        back_populates="qa_record", passive_deletes=True
+    )
+
+
+class QaCitationRow(Base):
+    __tablename__ = "qa_citations"
+    __table_args__ = (
+        CheckConstraint("page_start IS NULL OR page_end IS NULL OR page_end >= page_start"),
+        Index("ix_qa_citations_qa_record_id", "qa_record_id"),
+        Index("ix_qa_citations_paper_id", "paper_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    qa_record_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("qa_records.id", ondelete="CASCADE"), nullable=False
+    )
+    paper_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    artifact_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(Text)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_path: Mapped[str | None] = mapped_column(Text)
+    section: Mapped[str | None] = mapped_column(Text)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    excerpt: Mapped[str | None] = mapped_column(Text)
+
+    qa_record: Mapped[QaRecordRow] = relationship(back_populates="citations")
+
+
+class GenerationRunRow(Base):
+    __tablename__ = "generation_runs"
+    __table_args__ = (
+        CheckConstraint("kind IN ('answer', 'collection_synthesis', 'report')"),
+        CheckConstraint("status IN ('queued', 'running', 'completed', 'failed', 'interrupted')"),
+        Index("ix_generation_runs_conversation_id", "conversation_id"),
+        Index("ix_generation_runs_collection_id", "collection_id"),
+        Index("ix_generation_runs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    paper_id: Mapped[str | None] = mapped_column(Text, ForeignKey("papers.id", ondelete="CASCADE"))
+    collection_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("collections.id", ondelete="CASCADE")
+    )
+    conversation_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("conversations.id", ondelete="CASCADE")
+    )
+    qa_record_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("qa_records.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    source_snapshot_json: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    started_at: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[str | None] = mapped_column(Text)
+
+    llm_calls: Mapped[list[GenerationLlmCallRow]] = relationship(
+        back_populates="generation_run", passive_deletes=True
+    )
+
+
+class GenerationLlmCallRow(Base):
+    __tablename__ = "generation_llm_calls"
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('rewrite', 'route', 'retrieve', 'map', 'reduce', 'answer', 'repair')"
+        ),
+        Index("ix_generation_llm_calls_generation_run_id", "generation_run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("generation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    finish_reason: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    generation_run: Mapped[GenerationRunRow] = relationship(back_populates="llm_calls")

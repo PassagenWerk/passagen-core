@@ -77,6 +77,33 @@ def load_outline_prompt_template(path: Path | None) -> PromptTemplate:
     return load_prompt_template("outline-v2.txt", path, variables={"schema", "summary"})
 
 
+@dataclass(frozen=True, slots=True)
+class QaPromptTemplates:
+    rewrite: PromptTemplate
+    answer: PromptTemplate
+    repair: PromptTemplate
+
+
+def load_qa_prompt_templates() -> QaPromptTemplates:
+    return QaPromptTemplates(
+        rewrite=load_prompt_template(
+            "qa-rewrite-v1.txt",
+            None,
+            variables={"schema", "history", "question"},
+        ),
+        answer=load_prompt_template(
+            "qa-answer-v1.txt",
+            None,
+            variables={"schema", "question", "context"},
+        ),
+        repair=load_prompt_template(
+            "qa-repair-v1.txt",
+            None,
+            variables={"schema", "validation_error", "candidate"},
+        ),
+    )
+
+
 def load_abstract_fix_prompt_template(path: Path | None) -> PromptTemplate:
     return load_prompt_template(
         "abstract-fix-v1.txt",

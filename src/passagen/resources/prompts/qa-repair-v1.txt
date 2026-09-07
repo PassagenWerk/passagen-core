@@ -1,0 +1,14 @@
+The following JSON answer failed validation.
+
+Validation error:
+$validation_error
+
+Return a corrected JSON object that matches this schema:
+$schema
+
+Rules:
+- Only use citation metadata that appears in the source headers of the original prompt; never invent new artifact hashes, sections, or page numbers.
+- Remove claims that cannot be supported instead of fabricating citations.
+
+Candidate JSON:
+$candidate
