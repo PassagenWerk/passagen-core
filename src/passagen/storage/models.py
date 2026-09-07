@@ -22,6 +22,7 @@ class PaperRow(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     title: Mapped[str | None] = mapped_column(Text)
     abstract: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
     authors_json: Mapped[str | None] = mapped_column(Text)
     year: Mapped[int | None] = mapped_column(Integer)
     venue: Mapped[str | None] = mapped_column(Text)

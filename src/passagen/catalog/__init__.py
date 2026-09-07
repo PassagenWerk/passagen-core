@@ -266,6 +266,27 @@ class CatalogService:
         except OperationalError as exc:
             raise _operational_error(exc) from exc
 
+    def get_paper_note(self, paper_id: str) -> str:
+        try:
+            with session_scope(self.database_path) as session:
+                return _required(session, PaperRow, paper_id, "Paper").note or ""
+        except OperationalError as exc:
+            raise _operational_error(exc) from exc
+
+    def update_paper_note(self, paper_id: str, content: str) -> str:
+        if len(content) > 1_000_000:
+            raise CatalogValidationError("note must be at most 1000000 characters")
+        try:
+            with session_scope(self.database_path) as session:
+                row = _required(session, PaperRow, paper_id, "Paper")
+                row.note = content or None
+                row.updated_at = str(
+                    session.scalar(select(func.strftime("%Y-%m-%d %H:%M:%f", "now")))
+                )
+                return row.note or ""
+        except OperationalError as exc:
+            raise _operational_error(exc) from exc
+
     def list_tags(self) -> tuple[Tag, ...]:
         with session_scope(self.database_path) as session:
             rows = session.scalars(select(TagRow).order_by(TagRow.normalized_name, TagRow.id)).all()

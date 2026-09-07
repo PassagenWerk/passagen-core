@@ -73,6 +73,17 @@ def test_paper_list_filters_sorts_and_paginates(tmp_path: Path) -> None:
         catalog.list_papers(limit=0)
 
 
+def test_paper_note_can_be_saved_and_cleared(tmp_path: Path) -> None:
+    catalog, _ = _library(tmp_path)
+
+    assert catalog.get_paper_note("paper-0") == ""
+    assert catalog.update_paper_note("paper-0", "# Reading note\n\nImportant result.") == (
+        "# Reading note\n\nImportant result."
+    )
+    assert catalog.get_paper_note("paper-0") == "# Reading note\n\nImportant result."
+    assert catalog.update_paper_note("paper-0", "") == ""
+
+
 def test_paper_list_filters_by_multiple_tags(tmp_path: Path) -> None:
     catalog, _ = _library(tmp_path, count=4)
     systems = catalog.create_tag("Systems")

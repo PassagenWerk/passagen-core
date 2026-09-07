@@ -57,6 +57,7 @@ def test_initialize_database_creates_current_schema(tmp_path: Path) -> None:
     } <= tables
     assert "metadata_sources_json" in paper_columns
     assert "abstract" in paper_columns
+    assert "note" in paper_columns
     assert "size_bytes" in artifact_columns
     assert alembic_revision(database_path) == head_revision()
 
