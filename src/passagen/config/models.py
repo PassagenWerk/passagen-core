@@ -32,6 +32,23 @@ class ArxivSettings(BaseModel):
     timeout_seconds: float = Field(default=10.0, gt=0)
 
 
+class CitationPageSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    allowed_hosts: tuple[str, ...] = ("www.usenix.org",)
+    timeout_seconds: float = Field(default=10.0, gt=0)
+
+
+class OpenAlexSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: str = "https://api.openalex.org"
+    mailto: str | None = None
+    timeout_seconds: float = Field(default=10.0, gt=0)
+
+
 class GrobidSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +80,8 @@ class ProvidersSettings(BaseModel):
     healthcheck_timeout_seconds: float = Field(default=3.0, gt=0)
     crossref: CrossrefSettings = Field(default_factory=CrossrefSettings)
     arxiv: ArxivSettings = Field(default_factory=ArxivSettings)
+    citation_page: CitationPageSettings = Field(default_factory=CitationPageSettings)
+    openalex: OpenAlexSettings = Field(default_factory=OpenAlexSettings)
     grobid: GrobidSettings = Field(default_factory=GrobidSettings)
     llm: LlmSettings = Field(default_factory=LlmSettings)
 

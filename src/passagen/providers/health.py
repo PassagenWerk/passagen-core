@@ -51,6 +51,17 @@ def check_provider_health(settings: ProvidersSettings) -> ProviderHealthSnapshot
         )
     else:
         statuses["arxiv"] = ProviderStatus("arxiv", False, "disabled by configuration")
+    if settings.openalex.enabled:
+        openalex_params = {"search": "test", "per-page": "1"}
+        if settings.openalex.mailto:
+            openalex_params["mailto"] = settings.openalex.mailto
+        checks["openalex"] = lambda: http_status(
+            settings.openalex.base_url.rstrip("/") + "/works",
+            timeout,
+            params=openalex_params,
+        )
+    else:
+        statuses["openalex"] = ProviderStatus("openalex", False, "disabled by configuration")
     with ThreadPoolExecutor(max_workers=len(checks)) as executor:
         futures = {name: executor.submit(check) for name, check in checks.items()}
         for name, future in futures.items():

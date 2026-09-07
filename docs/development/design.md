@@ -36,10 +36,13 @@ artifact，不根据约定文件名直接访问。
 
 ## Metadata
 
-Metadata 候选来自本地 PDF、GROBID、Crossref 和 arXiv。合并遵循以下原则：
+Metadata 候选来自本地 PDF、GROBID、来源页标准 `citation_*` 元标签、OpenAlex、Crossref 和
+arXiv。合并遵循以下原则：
 
 - 用户编辑值优先级最高。
 - DOI 和 arXiv 只做精确查询。
+- 来源页只查询显式配置的 HTTPS 主机，不跟随重定向。
+- OpenAlex 标题必须规范化后完全一致；有本地作者时还要求作者交集，无作者时拒绝歧义结果。
 - 外部 provider 失败可降级到已经取得的本地值。
 - 自动刷新不得覆盖被标记为 user source 的字段。
 - 乐观并发校验防止两个写入者静默覆盖。

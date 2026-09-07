@@ -9,13 +9,15 @@ import httpx
 import pymupdf
 import pytest
 
-from passagen.config import MetadataSettings, ProvidersSettings
+from passagen.config import MetadataSettings, OpenAlexSettings, ProvidersSettings
 from passagen.domain import PaperStatus
 from passagen.external.metadata import (
     ArxivClient,
+    CitationPageClient,
     CrossrefClient,
     GrobidClient,
     MetadataLookupError,
+    OpenAlexClient,
 )
 from passagen.providers.metadata import (
     BibliographicMetadata,
@@ -378,6 +380,121 @@ def test_clients_convert_service_and_parse_errors(tmp_path: Path) -> None:
         ).extract(pdf_path)
 
 
+def test_citation_page_client_parses_highwire_metadata() -> None:
+    html = """
+    <html><head>
+      <meta name="citation_title" content="{SBB}: A Better Runtime">
+      <meta name="citation_author" content="Ada Lovelace">
+      <meta name="citation_author" content="Grace Hopper">
+      <meta name="citation_publication_date" content="2026/04/15">
+      <meta name="citation_conference_title" content="Systems Conference">
+      <meta name="citation_doi" content="https://doi.org/10.1000/SBB">
+    </head></html>
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=html)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = CitationPageClient(
+            allowed_hosts=("papers.example.org",),
+            timeout_seconds=1,
+            client=client,
+        ).lookup("https://papers.example.org/paper/1")
+
+    assert result is not None
+    assert result.title == "SBB: A Better Runtime"
+    assert result.authors == ("Ada Lovelace", "Grace Hopper")
+    assert result.year == 2026
+    assert result.venue == "Systems Conference"
+    assert result.doi == "10.1000/sbb"
+    assert result.sources["title"] == "citation_page"
+
+
+def test_citation_page_client_rejects_untrusted_urls() -> None:
+    client = CitationPageClient(
+        allowed_hosts=("papers.example.org",),
+        timeout_seconds=1,
+    )
+
+    for url in (
+        "http://papers.example.org/paper/1",
+        "https://localhost/paper/1",
+        "https://papers.example.org.evil.test/paper/1",
+        "https://user@papers.example.org/paper/1",
+        "https://papers.example.org:8443/paper/1",
+    ):
+        with pytest.raises(MetadataLookupError, match="not allowed"):
+            client.lookup(url)
+
+
+def test_openalex_client_requires_exact_title_and_author_match() -> None:
+    document = {
+        "results": [
+            {
+                "title": "SBB: A Better Runtime",
+                "publication_year": 2026,
+                "doi": "https://doi.org/10.1000/SBB",
+                "authorships": [{"author": {"display_name": "Ada Lovelace"}}],
+                "primary_location": {
+                    "landing_page_url": "https://doi.org/10.1000/sbb",
+                    "source": {"display_name": "Systems Conference"},
+                },
+                "abstract_inverted_index": {"Fast": [0], "runtime": [2], "memory": [1]},
+            },
+            {
+                "title": "SBB: A Better Runtime Extended",
+                "publication_year": 2026,
+                "authorships": [{"author": {"display_name": "Ada Lovelace"}}],
+            },
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["search"] == "SBB - A Better Runtime"
+        assert request.url.params["mailto"] == "contact@example.org"
+        return httpx.Response(200, json=document)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = OpenAlexClient(
+            base_url="https://api.openalex.test",
+            timeout_seconds=1,
+            mailto="contact@example.org",
+            client=client,
+        ).search(
+            "SBB - A Better Runtime",
+            authors=("Ada Lovelace",),
+            year=2026,
+        )
+
+    assert result is not None
+    assert result.title == "SBB: A Better Runtime"
+    assert result.abstract == "Fast memory runtime"
+    assert result.authors == ("Ada Lovelace",)
+    assert result.venue == "Systems Conference"
+    assert result.doi == "10.1000/sbb"
+    assert result.sources["abstract"] == "openalex"
+
+
+def test_openalex_client_rejects_ambiguous_or_author_mismatched_results() -> None:
+    item = {
+        "title": "Shared Title",
+        "authorships": [{"author": {"display_name": "Different Author"}}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [item, item]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        openalex = OpenAlexClient(
+            base_url="https://api.openalex.test",
+            timeout_seconds=1,
+            client=client,
+        )
+        assert openalex.search("Shared Title") is None
+        assert openalex.search("Shared Title", authors=("Expected Author",)) is None
+
+
 def test_metadata_merge_uses_later_provider_precedence() -> None:
     local = BibliographicMetadata(
         title="PDF title",
@@ -427,6 +544,19 @@ class FakeLookup:
 
 
 @dataclass(slots=True)
+class FakeCitationLookup:
+    result: BibliographicMetadata | None = None
+    error: str | None = None
+    urls: list[str] = field(default_factory=list)
+
+    def lookup(self, url: str) -> BibliographicMetadata | None:
+        self.urls.append(url)
+        if self.error:
+            raise MetadataLookupError(self.error)
+        return self.result
+
+
+@dataclass(slots=True)
 class FakePdfLookup:
     result: BibliographicMetadata | None = None
     error: str | None = None
@@ -437,6 +567,102 @@ class FakePdfLookup:
         if self.error:
             raise MetadataLookupError(self.error)
         return self.result
+
+
+@dataclass(slots=True)
+class FakeSearch:
+    result: BibliographicMetadata | None = None
+    error: str | None = None
+    queries: list[tuple[str, tuple[str, ...], int | None]] = field(default_factory=list)
+
+    def search(
+        self,
+        title: str,
+        *,
+        authors: tuple[str, ...] = (),
+        year: int | None = None,
+    ) -> BibliographicMetadata | None:
+        self.queries.append((title, authors, year))
+        if self.error:
+            raise MetadataLookupError(self.error)
+        return self.result
+
+
+def test_resolve_metadata_uses_source_page_then_openalex_before_exact_lookup(
+    tmp_path: Path,
+) -> None:
+    source_url = "https://www.usenix.org/conference/test/presentation/paper"
+    source_path = tmp_path / "inbox" / "paper.pdf"
+    write_pdf(source_path, source_url, title="Incomplete Local Title", author="")
+    data_dir = tmp_path / "data"
+    database_path = data_dir / "passagen.db"
+    paper = scan_directory(
+        source_path.parent,
+        data_dir=data_dir,
+        database_path=database_path,
+    ).imported[0]
+    citation_page = FakeCitationLookup(
+        BibliographicMetadata(
+            title="Published Paper",
+            authors=("Ada Lovelace",),
+            year=2026,
+            source_url=source_url,
+            sources={
+                "title": "citation_page",
+                "authors": "citation_page",
+                "year": "citation_page",
+                "source_url": "citation_page",
+            },
+        )
+    )
+    openalex = FakeSearch(
+        BibliographicMetadata(
+            title="Published Paper",
+            abstract="Indexed abstract.",
+            venue="Indexed Venue",
+            doi="10.1000/paper",
+            sources={
+                "title": "openalex",
+                "abstract": "openalex",
+                "venue": "openalex",
+                "doi": "openalex",
+            },
+        )
+    )
+    crossref = FakeLookup(
+        BibliographicMetadata(
+            title="Published Paper",
+            venue="Canonical Venue",
+            doi="10.1000/paper",
+            sources={"title": "crossref", "venue": "crossref", "doi": "crossref"},
+        )
+    )
+    grobid = FakePdfLookup(error="must not be called")
+
+    result = resolve_paper_metadata(
+        database_path,
+        data_dir,
+        paper.id,
+        MetadataSettings(),
+        ProvidersSettings(),
+        citation_page=citation_page,
+        openalex=openalex,
+        crossref=crossref,
+        arxiv=FakeLookup(error="must not be called"),
+        grobid=grobid,
+    )
+
+    assert citation_page.urls == [source_url]
+    assert openalex.queries == [("Published Paper", ("Ada Lovelace",), 2026)]
+    assert crossref.identifiers == ["10.1000/paper"]
+    assert grobid.paths == []
+    assert result.paper.title == "Published Paper"
+    assert result.paper.authors == ("Ada Lovelace",)
+    assert result.paper.abstract == "Indexed abstract."
+    assert result.paper.venue == "Canonical Venue"
+    assert result.paper.metadata_sources["title"] == "crossref"
+    assert result.paper.metadata_sources["authors"] == "citation_page"
+    assert result.paper.metadata_sources["abstract"] == "openalex"
 
 
 def test_resolve_metadata_uses_grobid_when_local_identity_is_incomplete(
@@ -480,7 +706,7 @@ def test_resolve_metadata_uses_grobid_when_local_identity_is_incomplete(
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=crossref,
         arxiv=FakeLookup(error="must not be called"),
         grobid=grobid,
@@ -521,7 +747,7 @@ def test_resolve_metadata_prefers_complete_grobid_identity_when_local_authors_ar
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=FakeLookup(error="must not be called"),
         arxiv=FakeLookup(error="must not be called"),
         grobid=FakePdfLookup(
@@ -564,7 +790,7 @@ def test_resolve_metadata_rejects_grobid_publisher_cover_identity(tmp_path: Path
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=crossref,
         arxiv=FakeLookup(error="must not be called"),
         grobid=FakePdfLookup(
@@ -638,7 +864,7 @@ def test_resolve_metadata_uses_grobid_to_recover_crossref_conflict(tmp_path: Pat
             data_dir,
             paper.id,
             MetadataSettings(),
-            ProvidersSettings(),
+            ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
             crossref=crossref,
             arxiv=FakeLookup(error="must not be called"),
             grobid=grobid,
@@ -684,7 +910,7 @@ def test_resolve_metadata_continues_when_grobid_fails(tmp_path: Path) -> None:
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=FakeLookup(error="must not be called"),
         arxiv=FakeLookup(error="must not be called"),
         grobid=FakePdfLookup(error="GROBID unavailable"),
@@ -737,7 +963,7 @@ def test_resolve_metadata_queries_both_providers_and_persists_sources(tmp_path: 
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=crossref,
         arxiv=arxiv,
         grobid=FakePdfLookup(),
@@ -771,7 +997,7 @@ def test_resolve_metadata_rejects_crossref_title_mismatch(tmp_path: Path) -> Non
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=FakeLookup(
             BibliographicMetadata(
                 title="Proceedings of the ACM SIGCOMM Conference",
@@ -808,7 +1034,7 @@ def test_resolve_metadata_continues_when_api_fails(tmp_path: Path) -> None:
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=FakeLookup(error="Crossref unavailable"),
         arxiv=FakeLookup(error="must not be called"),
         grobid=FakePdfLookup(),
@@ -839,7 +1065,7 @@ def test_resolve_metadata_without_identifiers_does_not_call_api(tmp_path: Path) 
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=crossref,
         arxiv=arxiv,
         grobid=FakePdfLookup(),
@@ -849,7 +1075,7 @@ def test_resolve_metadata_without_identifiers_does_not_call_api(tmp_path: Path) 
         data_dir,
         paper.id,
         MetadataSettings(),
-        ProvidersSettings(),
+        ProvidersSettings(openalex=OpenAlexSettings(enabled=False)),
         crossref=crossref,
         arxiv=arxiv,
     )

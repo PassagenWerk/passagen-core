@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from passagen.config import ArxivSettings, CrossrefSettings, ProvidersSettings
+from passagen.config import ArxivSettings, CrossrefSettings, OpenAlexSettings, ProvidersSettings
 from passagen.providers import (
     ProviderUnavailableError,
     check_parser_health,
@@ -27,6 +27,7 @@ def test_provider_health_records_results_without_raising(
 
     assert health.statuses["crossref"].available is True
     assert health.statuses["arxiv"].available is True
+    assert health.statuses["openalex"].available is True
     assert health.statuses["grobid"].available is True
     assert health.statuses["llm"].available is False
     with pytest.raises(ProviderUnavailableError, match="HTTP 503"):
@@ -46,13 +47,15 @@ def test_provider_health_does_not_probe_disabled_metadata_providers(
     settings = ProvidersSettings(
         crossref=CrossrefSettings(enabled=False),
         arxiv=ArxivSettings(enabled=False),
+        openalex=OpenAlexSettings(enabled=False),
     )
 
     health = check_provider_health(settings)
 
     assert health.statuses["crossref"].detail == "disabled by configuration"
     assert health.statuses["arxiv"].detail == "disabled by configuration"
-    assert not any("crossref" in url or "arxiv" in url for url in requested)
+    assert health.statuses["openalex"].detail == "disabled by configuration"
+    assert not any("crossref" in url or "arxiv" in url or "openalex" in url for url in requested)
 
 
 def test_parser_health_only_probes_grobid(monkeypatch: pytest.MonkeyPatch) -> None:

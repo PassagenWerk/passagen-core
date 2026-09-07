@@ -22,6 +22,16 @@ providers:
     enabled: true
     base_url: https://export.arxiv.org
     timeout_seconds: 10
+  citation_page:
+    enabled: true
+    allowed_hosts:
+      - www.usenix.org
+    timeout_seconds: 10
+  openalex:
+    enabled: true
+    base_url: https://api.openalex.org
+    mailto: null
+    timeout_seconds: 10
   grobid:
     base_url: http://localhost:8070
     timeout_seconds: 60
@@ -117,7 +127,32 @@ PyMuPDF 不能替代 OCR。输入 PDF 必须已经包含文本层。
 
 ## Metadata Provider
 
-Passagen 只在识别到精确 DOI 或 arXiv ID 后查询对应服务，不根据模糊标题自动合并论文。
+Passagen 按以下优先级合并 metadata：用户编辑、Crossref/arXiv 精确标识符结果、来源页
+`citation_*` metadata、OpenAlex 严格搜索结果、GROBID、本地 PDF。后面的低优先级来源只用于
+补齐高优先级来源缺少的字段。
+
+来源页查询仅接受 `citation_page.allowed_hosts` 中的精确 HTTPS 主机名。Passagen 不跟随
+重定向，不接受 URL 凭据、非 443 端口或子域通配；需要支持出版社或会议站点时应逐个加入：
+
+```yaml
+providers:
+  citation_page:
+    enabled: true
+    allowed_hosts:
+      - www.usenix.org
+      - proceedings.example.org
+```
+
+OpenAlex 使用标题搜索，但不会直接采用模糊结果。候选标题规范化后必须完全一致；PDF 已有作者
+时还必须至少匹配一名作者；无作者时必须只有一个同标题、同年份候选。OpenAlex 建议设置联系
+邮箱：
+
+```yaml
+providers:
+  openalex:
+    enabled: true
+    mailto: you@example.com
+```
 
 Crossref 建议设置联系邮箱：
 
@@ -135,6 +170,10 @@ providers:
   crossref:
     enabled: false
   arxiv:
+    enabled: false
+  citation_page:
+    enabled: false
+  openalex:
     enabled: false
 ```
 

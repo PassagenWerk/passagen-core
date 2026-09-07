@@ -11,10 +11,14 @@ from passagen.domain import (
 )
 from passagen.external.metadata import (
     ArxivClient,
+    CitationMetadataLookup,
+    CitationPageClient,
     CrossrefClient,
     GrobidClient,
     MetadataLookup,
     MetadataLookupError,
+    MetadataSearch,
+    OpenAlexClient,
     PdfMetadataLookup,
 )
 from passagen.parsing.metadata import PdfMetadataError, extract_pdf_metadata
@@ -22,9 +26,11 @@ from passagen.parsing.metadata import PdfMetadataError, extract_pdf_metadata
 __all__ = [
     "ConfiguredMetadataProvider",
     "BibliographicMetadata",
+    "CitationMetadataLookup",
     "MetadataLookup",
     "MetadataLookupError",
     "MetadataProvider",
+    "MetadataSearch",
     "PdfMetadataLookup",
     "PdfMetadataError",
     "extract_arxiv_id",
@@ -37,6 +43,16 @@ __all__ = [
 
 
 class MetadataProvider(Protocol):
+    def citation_page(self, url: str) -> BibliographicMetadata | None: ...
+
+    def openalex(
+        self,
+        title: str,
+        *,
+        authors: tuple[str, ...] = (),
+        year: int | None = None,
+    ) -> BibliographicMetadata | None: ...
+
     def crossref(self, identifier: str) -> BibliographicMetadata | None: ...
 
     def arxiv(self, identifier: str) -> BibliographicMetadata | None: ...
@@ -93,10 +109,21 @@ class ConfiguredMetadataProvider:
         self,
         settings: ProvidersSettings,
         *,
+        citation_page: CitationMetadataLookup | None = None,
+        openalex: MetadataSearch | None = None,
         crossref: MetadataLookup | None = None,
         arxiv: MetadataLookup | None = None,
         grobid: PdfMetadataLookup | None = None,
     ) -> None:
+        self.citation_page_client = citation_page or CitationPageClient(
+            allowed_hosts=settings.citation_page.allowed_hosts,
+            timeout_seconds=settings.citation_page.timeout_seconds,
+        )
+        self.openalex_client = openalex or OpenAlexClient(
+            base_url=settings.openalex.base_url,
+            timeout_seconds=settings.openalex.timeout_seconds,
+            mailto=settings.openalex.mailto,
+        )
         self.crossref_client = crossref or CrossrefClient(
             base_url=settings.crossref.base_url,
             timeout_seconds=settings.crossref.timeout_seconds,
@@ -110,6 +137,18 @@ class ConfiguredMetadataProvider:
             base_url=settings.grobid.base_url,
             timeout_seconds=settings.grobid.timeout_seconds,
         )
+
+    def citation_page(self, url: str) -> BibliographicMetadata | None:
+        return self.citation_page_client.lookup(url)
+
+    def openalex(
+        self,
+        title: str,
+        *,
+        authors: tuple[str, ...] = (),
+        year: int | None = None,
+    ) -> BibliographicMetadata | None:
+        return self.openalex_client.search(title, authors=authors, year=year)
 
     def crossref(self, identifier: str) -> BibliographicMetadata | None:
         return self.crossref_client.lookup(identifier)

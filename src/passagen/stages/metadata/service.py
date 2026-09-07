@@ -4,15 +4,18 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from passagen.config import MetadataSettings, ProvidersSettings
 from passagen.domain import PaperStatus
 from passagen.providers import ProviderHealthSnapshot, ProviderUnavailableError
 from passagen.providers.metadata import (
     BibliographicMetadata,
+    CitationMetadataLookup,
     ConfiguredMetadataProvider,
     MetadataLookup,
     MetadataLookupError,
+    MetadataSearch,
     PdfMetadataError,
     PdfMetadataLookup,
     extract_pdf_metadata,
@@ -40,6 +43,8 @@ def resolve_paper_metadata(
     *,
     provider_health: ProviderHealthSnapshot | None = None,
     force: bool = False,
+    citation_page: CitationMetadataLookup | None = None,
+    openalex: MetadataSearch | None = None,
     crossref: MetadataLookup | None = None,
     arxiv: MetadataLookup | None = None,
     grobid: PdfMetadataLookup | None = None,
@@ -100,15 +105,41 @@ def resolve_paper_metadata(
     warnings: list[str] = []
     metadata_provider = ConfiguredMetadataProvider(
         providers,
+        citation_page=citation_page,
+        openalex=openalex,
         crossref=crossref,
         arxiv=arxiv,
         grobid=grobid,
     )
+    existing = _existing_metadata(paper)
+    citation_metadata = (
+        _lookup_citation_page(
+            existing.source_url or local.source_url,
+            metadata_provider.citation_page,
+            enabled=providers.citation_page.enabled,
+            allowed_hosts=providers.citation_page.allowed_hosts,
+            warnings=warnings,
+            progress=progress,
+        )
+        or BibliographicMetadata()
+    )
+    source_candidate = merge_metadata(local, citation_metadata, existing)
+    openalex_metadata = (
+        _search_openalex(
+            source_candidate,
+            metadata_provider.openalex_client,
+            enabled=providers.openalex.enabled,
+            warnings=warnings,
+            progress=progress,
+        )
+        or BibliographicMetadata()
+    )
+    candidate = merge_metadata(local, openalex_metadata, citation_metadata, existing)
     grobid_attempted = False
     grobid_metadata = BibliographicMetadata()
-    if _needs_grobid(local):
+    if _needs_grobid(candidate):
         _require_provider(provider_health, "grobid")
-        fallback_reason = _grobid_reason(local)
+        fallback_reason = _grobid_reason(candidate)
         logger.info(
             "metadata fallback selected: paper_id=%s provider=GROBID reason=%s",
             paper.id,
@@ -116,9 +147,15 @@ def resolve_paper_metadata(
         )
         report_progress(progress, f"Trying GROBID fallback ({fallback_reason}).")
         extracted = _extract_grobid(pdf_path, metadata_provider.grobid, warnings, progress)
-        grobid_metadata = _initial_grobid_fallback(local, extracted, warnings, progress)
+        grobid_metadata = _initial_grobid_fallback(candidate, extracted, warnings, progress)
         grobid_attempted = True
-    candidate = merge_metadata(local, grobid_metadata)
+    candidate = merge_metadata(
+        local,
+        grobid_metadata,
+        openalex_metadata,
+        citation_metadata,
+        existing,
+    )
     queried_doi = candidate.doi
     if queried_doi is not None and providers.crossref.enabled:
         _require_provider(provider_health, "crossref")
@@ -152,7 +189,13 @@ def resolve_paper_metadata(
             )
             grobid_metadata = BibliographicMetadata()
         grobid_attempted = True
-        candidate = merge_metadata(local, grobid_metadata)
+        candidate = merge_metadata(
+            local,
+            grobid_metadata,
+            openalex_metadata,
+            citation_metadata,
+            existing,
+        )
         if candidate.doi != queried_doi:
             logger.info(
                 "metadata DOI corrected by GROBID: paper_id=%s old_doi=%s new_doi=%s",
@@ -193,10 +236,11 @@ def resolve_paper_metadata(
         warnings=warnings,
         progress=progress,
     )
-    existing = _existing_metadata(paper)
     metadata = merge_metadata(
         local,
         grobid_metadata,
+        openalex_metadata,
+        citation_metadata,
         arxiv_metadata,
         crossref_metadata,
         existing,
@@ -220,6 +264,79 @@ def resolve_paper_metadata(
     )
     report_progress(progress, "Metadata saved.")
     return MetadataResolutionResult(paper=updated, warnings=tuple(warnings))
+
+
+def _lookup_citation_page(
+    source_url: str | None,
+    lookup: Callable[[str], BibliographicMetadata | None],
+    *,
+    enabled: bool,
+    allowed_hosts: tuple[str, ...],
+    warnings: list[str],
+    progress: ProgressCallback | None,
+) -> BibliographicMetadata | None:
+    if not enabled or source_url is None or not _source_url_allowed(source_url, allowed_hosts):
+        return None
+    report_progress(progress, "Looking up citation metadata from the source page.")
+    try:
+        result = lookup(source_url)
+    except MetadataLookupError as exc:
+        warning = str(exc)
+        warnings.append(warning)
+        report_progress(progress, warning)
+        return None
+    if result is not None:
+        report_progress(progress, "Citation page metadata found.")
+    return result
+
+
+def _search_openalex(
+    candidate: BibliographicMetadata,
+    search: MetadataSearch,
+    *,
+    enabled: bool,
+    warnings: list[str],
+    progress: ProgressCallback | None,
+) -> BibliographicMetadata | None:
+    if (
+        not enabled
+        or candidate.title is None
+        or candidate.doi is not None
+        or candidate.arxiv_id is not None
+    ):
+        return None
+    report_progress(progress, "Searching OpenAlex for an exact title match.")
+    try:
+        result = search.search(
+            candidate.title,
+            authors=candidate.authors,
+            year=candidate.year,
+        )
+    except MetadataLookupError as exc:
+        warning = str(exc)
+        warnings.append(warning)
+        report_progress(progress, warning)
+        return None
+    if result is not None:
+        report_progress(progress, "OpenAlex metadata found.")
+    return result
+
+
+def _source_url_allowed(url: str, allowed_hosts: tuple[str, ...]) -> bool:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    normalized_hosts = {host.casefold().rstrip(".") for host in allowed_hosts}
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname is not None
+        and parsed.hostname.casefold().rstrip(".") in normalized_hosts
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+    )
 
 
 def _require_provider(health: ProviderHealthSnapshot | None, name: str) -> None:
