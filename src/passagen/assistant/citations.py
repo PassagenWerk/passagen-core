@@ -7,6 +7,7 @@ before anything is persisted, so a fabricated citation fails the whole turn.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -94,9 +95,13 @@ def _validate_summary_locator(citation: Citation, summary: StructuredSummary | N
     if citation.page_start is not None:
         evidence_pages = node.get("evidence_pages") if isinstance(node, dict) else None
         if not isinstance(evidence_pages, list) or citation.page_start not in evidence_pages:
+            rendered_node = json.dumps(node, ensure_ascii=True, sort_keys=True)
             raise CitationValidationError(
                 f"Citation {citation.citation_id} page {citation.page_start} is not in the "
-                f"evidence pages of {citation.summary_path}"
+                f"evidence pages of {citation.summary_path}. The resolved summary value is "
+                f"{rendered_node}; its allowed evidence pages are "
+                f"{evidence_pages if isinstance(evidence_pages, list) else []}. Recheck that "
+                "the summary_path supports the claim instead of changing only the page."
             )
 
 
@@ -174,7 +179,9 @@ def _validate_raw_locator(citation: Citation, parsed: ParsedPaper | None) -> Non
         section.text
     ):
         raise CitationValidationError(
-            f"Citation {citation.citation_id} excerpt was not found in section {section.title!r}"
+            f"Citation {citation.citation_id} excerpt was not found in section {section.title!r}. "
+            "An excerpt must be one contiguous verbatim substring; replace it with exact source "
+            "text or omit the optional excerpt."
         )
 
 

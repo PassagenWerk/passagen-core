@@ -1,0 +1,29 @@
+The candidate failed validation. You must correct the reported defect; returning the invalid candidate unchanged is not acceptable.
+
+Validation error:
+$validation_error
+
+Return a corrected JSON object that matches this schema:
+$schema
+
+The standalone question is:
+<question>
+$question
+</question>
+
+The only allowed evidence is:
+<sources>
+$context
+</sources>
+
+Rules:
+- First inspect the citation named in the validation error and change or remove the unsupported claim and citation.
+- Only use citation metadata and locators supported by these source headers and contents; never invent new artifact hashes, sections, paths, or page numbers.
+- For summary_json, verify that the value at the exact summary_path supports the claim and use only that value's evidence_pages. Do not fix a path/page mismatch by changing only the page when the resolved value describes a different result.
+- For outline_md, use a section that matches an outline heading.
+- For extracted_json, use a section and pages present in its source header. excerpt is optional; if included, it must be one contiguous verbatim substring of the section text, with no paraphrasing or ellipses. Omit excerpt when an exact quote is unnecessary.
+- Remove claims that cannot be supported instead of fabricating citations or locators.
+- Return only the corrected JSON object.
+
+Candidate JSON:
+$candidate

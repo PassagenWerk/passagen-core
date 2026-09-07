@@ -146,8 +146,10 @@ def test_unresolvable_summary_path_is_rejected() -> None:
 
 
 def test_page_outside_evidence_pages_is_rejected() -> None:
-    with pytest.raises(CitationValidationError, match="evidence pages"):
+    with pytest.raises(CitationValidationError, match="allowed evidence pages are \\[5\\]") as exc:
         validate_answer_citations(_answer(_summary_citation(page_start=6)), _index())
+    assert '"metric": "latency"' in str(exc.value)
+    assert "Recheck that the summary_path supports the claim" in str(exc.value)
 
 
 def test_outline_section_must_match_a_heading() -> None:
@@ -185,7 +187,7 @@ def test_raw_citation_checks_section_pages_and_excerpt() -> None:
         validate_answer_citations(_answer(bad_pages), _index())
 
     bad_excerpt = raw_citation.model_copy(update={"excerpt": "invented sentence"})
-    with pytest.raises(CitationValidationError, match="excerpt"):
+    with pytest.raises(CitationValidationError, match="contiguous verbatim substring"):
         validate_answer_citations(_answer(bad_excerpt), _index())
 
     bad_section = raw_citation.model_copy(update={"section": "7 Conclusion"})

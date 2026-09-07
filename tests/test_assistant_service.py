@@ -154,6 +154,21 @@ def test_invalid_citation_is_repaired(tmp_path: Path) -> None:
     assert stages == ["rewrite", "answer", "repair"]
 
 
+def test_repair_prompt_explains_summary_path_page_mismatch(tmp_path: Path) -> None:
+    env = assistant_env(tmp_path)
+    bad_answer = good_answer(env, "具体数值是多少？").replace('"page_start": 5', '"page_start": 6')
+    provider = FakeProvider(scripted_responder(env, first_answer=bad_answer))
+    service = assistant_service(env, provider)
+
+    turn = service.ask(_create(service), "具体数值是多少？")
+
+    assert turn.answer_message.status is MessageStatus.COMPLETED
+    repair_prompt = provider.prompts[-1]
+    assert "allowed evidence pages are [5]" in repair_prompt
+    assert '"metric": "latency"' in repair_prompt
+    assert "returning the invalid candidate unchanged is not acceptable" in repair_prompt
+
+
 def test_unrepairable_citation_fails_turn_atomically(tmp_path: Path) -> None:
     env = assistant_env(tmp_path)
     question = "具体数值是多少？"
