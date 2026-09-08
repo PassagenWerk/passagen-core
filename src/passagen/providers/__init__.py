@@ -5,6 +5,7 @@ from passagen.providers.health import (
     ProviderUnavailableError,
     check_parser_health,
     check_provider_health,
+    llm_health_key,
 )
 from passagen.providers.llm import (
     LlmCallStats,
@@ -13,7 +14,9 @@ from passagen.providers.llm import (
     LlmResponse,
     LlmStage,
     OpenAICompatibleProvider,
+    ResolvedLlmProvider,
     TrackedLlmProvider,
+    resolve_llm_provider,
     retry_truncated_response,
 )
 
@@ -24,12 +27,15 @@ __all__ = [
     "ProviderUnavailableError",
     "check_parser_health",
     "check_provider_health",
+    "llm_health_key",
     "LlmCallStats",
     "LlmProvider",
     "LlmProviderError",
     "LlmResponse",
     "LlmStage",
     "OpenAICompatibleProvider",
+    "ResolvedLlmProvider",
     "TrackedLlmProvider",
+    "resolve_llm_provider",
     "retry_truncated_response",
 ]

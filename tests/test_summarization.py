@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from passagen.config import (
+    LlmProfileSettings,
     LlmSettings,
     PipelineSettings,
     ProvidersSettings,
@@ -164,12 +165,7 @@ def test_auto_strategy_falls_back_to_hierarchical_when_full_prompt_exceeds_budge
         tmp_path,
         sections=(ParsedSection(title="Design", text=big_text, pages=(3, 4)),),
     )
-    settings = LlmSettings(
-        context_window_tokens=15_000,
-        max_context_utilization=1.0,
-        safety_margin_tokens=1_000,
-        chars_per_token=1.0,
-    )
+    settings = LlmSettings(default=LlmProfileSettings(max_context_window=3_500))
     summarization = SummarizationSettings(summary_max_output_tokens=100)
     provider = FakeProvider(['{"evidence": []}', valid_summary()])
 
@@ -195,12 +191,7 @@ def test_forced_full_strategy_fails_before_calling_provider_when_over_budget(
     tmp_path: Path,
 ) -> None:
     database_path, data_dir, paper_id = setup_parsed_paper(tmp_path)
-    settings = LlmSettings(
-        context_window_tokens=1_000,
-        max_context_utilization=1.0,
-        safety_margin_tokens=0,
-        chars_per_token=1.0,
-    )
+    settings = LlmSettings(default=LlmProfileSettings(max_context_window=1_000))
     summarization = SummarizationSettings(
         strategy=SummarizationStrategy.FULL, summary_max_output_tokens=100
     )

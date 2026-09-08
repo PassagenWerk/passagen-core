@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CONFIG_FILENAME = "passagen.yaml"
@@ -56,8 +56,30 @@ class GrobidSettings(BaseModel):
     timeout_seconds: float = Field(default=60.0, gt=0)
 
 
-class LlmSettings(BaseModel):
-    """Global LLM call parameters shared by every LLM-powered stage."""
+class LlmFlavor(StrEnum):
+    DEEPSEEK = "deepseek"
+    OPENAI = "openai"
+
+
+class LlmReasoning(StrEnum):
+    DISABLE = "disable"
+    ENABLE = "enable"
+
+
+class LlmPurpose(StrEnum):
+    ABSTRACT_CLEANUP = "abstract_cleanup"
+    SUMMARY_EVIDENCE = "summary_evidence"
+    SUMMARY_REDUCE = "summary_reduce"
+    SUMMARY_SYNTHESIS = "summary_synthesis"
+    SUMMARY_REPAIR = "summary_repair"
+    OUTLINE_SYNTHESIS = "outline_synthesis"
+    QA_REWRITE = "qa_rewrite"
+    QA_ANSWER = "qa_answer"
+    QA_REPAIR = "qa_repair"
+
+
+class LlmProfileSettings(BaseModel):
+    """Connection and model behavior for one LLM profile."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -65,11 +87,34 @@ class LlmSettings(BaseModel):
     model: str = "deepseek-flash-v4"
     api_key_env: str = "PASSAGEN_API_KEY"
     timeout_seconds: float = Field(default=120.0, gt=0)
-    disable_thinking: bool = False
-    context_window_tokens: int = Field(default=128_000, ge=1_000)
-    max_context_utilization: float = Field(default=0.65, gt=0, le=1.0)
-    safety_margin_tokens: int = Field(default=8_000, ge=0)
-    chars_per_token: float = Field(default=4.0, gt=0)
+    max_context_window: int = Field(default=128_000, ge=1_000)
+    flavor: LlmFlavor = LlmFlavor.DEEPSEEK
+    reasoning: LlmReasoning = LlmReasoning.DISABLE
+
+
+class LlmSettings(BaseModel):
+    """Default LLM plus optional advanced per-purpose profile routing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default: LlmProfileSettings = Field(default_factory=LlmProfileSettings)
+    profiles: dict[str, LlmProfileSettings] = Field(default_factory=dict)
+    tasks: dict[LlmPurpose, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_task_profiles(self) -> LlmSettings:
+        if "default" in self.profiles:
+            raise ValueError("LLM profile name 'default' is reserved")
+        unknown = sorted(set(self.tasks.values()) - set(self.profiles))
+        if unknown:
+            raise ValueError(f"LLM tasks reference unknown profiles: {', '.join(unknown)}")
+        return self
+
+    def resolve(self, purpose: LlmPurpose) -> tuple[str, LlmProfileSettings]:
+        profile_name = self.tasks.get(purpose, "default")
+        if profile_name == "default":
+            return profile_name, self.default
+        return profile_name, self.profiles[profile_name]
 
 
 class ProvidersSettings(BaseModel):
@@ -120,7 +165,7 @@ class SummarizationStrategy(StrEnum):
 
 
 class SummarizationSettings(BaseModel):
-    """Summary strategy and chunking parameters; global LLM limits live in providers.llm."""
+    """Summary strategy and chunking parameters; model limits live in LLM profiles."""
 
     model_config = ConfigDict(extra="forbid")
 

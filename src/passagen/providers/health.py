@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 
 from passagen.config import ProvidersSettings
 from passagen.external.availability import grobid_status, http_status, llm_status
@@ -28,12 +29,21 @@ class ProviderHealthSnapshot:
             raise ProviderUnavailableError(f"Provider {name} is unavailable: {status.detail}")
 
 
+def llm_health_key(profile_name: str) -> str:
+    return "llm" if profile_name == "default" else f"llm:{profile_name}"
+
+
 def check_provider_health(settings: ProvidersSettings) -> ProviderHealthSnapshot:
     timeout = settings.healthcheck_timeout_seconds
+    default_llm = settings.llm.default
     checks = {
         "grobid": lambda: grobid_status(settings.grobid.base_url, timeout),
-        "llm": lambda: llm_status(settings.llm.base_url, settings.llm.api_key_env, timeout),
+        "llm": lambda: llm_status(default_llm.base_url, default_llm.api_key_env, timeout),
     }
+    for profile_name, profile in settings.llm.profiles.items():
+        checks[f"llm:{profile_name}"] = partial(
+            llm_status, profile.base_url, profile.api_key_env, timeout
+        )
     statuses: dict[str, ProviderStatus] = {}
     if settings.crossref.enabled:
         checks["crossref"] = lambda: http_status(

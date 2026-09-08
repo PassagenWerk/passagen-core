@@ -11,17 +11,18 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from passagen.config import AbstractFixingSettings, LlmSettings
+from passagen.config import AbstractFixingSettings, LlmPurpose, LlmSettings
 from passagen.prompting import PromptTemplateError, load_abstract_fix_prompt_template
 from passagen.providers import (
     LlmCallStats,
     LlmProvider,
     LlmProviderError,
     LlmStage,
-    OpenAICompatibleProvider,
     ProviderHealthSnapshot,
     ProviderUnavailableError,
     TrackedLlmProvider,
+    llm_health_key,
+    resolve_llm_provider,
 )
 from passagen.stages.abstract_fixing.schema import (
     ABSTRACT_FIX_SCHEMA_VERSION,
@@ -85,7 +86,8 @@ def fix_paper_abstract(
 
     raw_hash = hashlib.sha256(paper.abstract.encode()).hexdigest()
     existing = get_artifact(database_path, paper_id, ABSTRACT_FIX_ARTIFACT_KIND)
-    expected_model = provider.model if provider is not None else llm_settings.model
+    profile_name, profile = llm_settings.resolve(LlmPurpose.ABSTRACT_CLEANUP)
+    expected_model = provider.model if provider is not None else profile.model
     if not force and existing is not None:
         cached = _load_artifact(data_dir, existing)
         if (
@@ -97,15 +99,21 @@ def fix_paper_abstract(
             return AbstractFixResult(paper, existing, cached, updated=False)
     if provider_health is not None:
         try:
-            provider_health.require("llm")
+            provider_health.require(llm_health_key(profile_name))
         except ProviderUnavailableError as exc:
             raise AbstractFixError(str(exc)) from exc
 
     try:
-        selected_provider = provider or OpenAICompatibleProvider(llm_settings)
+        resolved = resolve_llm_provider(llm_settings, LlmPurpose.ABSTRACT_CLEANUP, provider)
+        selected_provider = resolved.provider
     except LlmProviderError as exc:
         raise AbstractFixError(str(exc)) from exc
-    llm = TrackedLlmProvider(selected_provider, llm_stats)
+    llm = TrackedLlmProvider(
+        selected_provider,
+        llm_stats,
+        profile_name=resolved.profile_name,
+        purpose=LlmPurpose.ABSTRACT_CLEANUP,
+    )
     run_id = start_processing_run(database_path, paper_id, "abstract_fix")
     prompt = template.render(
         schema=json.dumps(AbstractFixCandidate.model_json_schema(), ensure_ascii=False),

@@ -2,14 +2,42 @@ from pathlib import Path
 
 import pytest
 
-from passagen.config import CONFIG_FILENAME, ConfigError, LlmSettings, load_settings
+from passagen.config import CONFIG_FILENAME, ConfigError, LlmPurpose, LlmSettings, load_settings
 
 
 def test_defaults_to_deepseek_flash() -> None:
     settings = LlmSettings()
 
-    assert settings.base_url == "https://api.deepseek.com/v1"
-    assert settings.model == "deepseek-flash-v4"
+    assert settings.default.base_url == "https://api.deepseek.com/v1"
+    assert settings.default.model == "deepseek-flash-v4"
+    assert settings.resolve(LlmPurpose.QA_ANSWER) == ("default", settings.default)
+
+
+def test_routes_selected_tasks_to_advanced_profiles() -> None:
+    settings = LlmSettings.model_validate(
+        {
+            "default": {"model": "fast-model"},
+            "profiles": {
+                "reasoning": {
+                    "model": "reasoning-model",
+                    "reasoning": "enable",
+                }
+            },
+            "tasks": {"summary_synthesis": "reasoning"},
+        }
+    )
+
+    profile_name, profile = settings.resolve(LlmPurpose.SUMMARY_SYNTHESIS)
+    assert profile_name == "reasoning"
+    assert profile.model == "reasoning-model"
+    assert settings.resolve(LlmPurpose.SUMMARY_EVIDENCE) == ("default", settings.default)
+
+
+def test_rejects_task_route_to_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="unknown profiles: missing"):
+        LlmSettings.model_validate(
+            {"default": {"model": "fast-model"}, "tasks": {"qa_answer": "missing"}}
+        )
 
 
 def test_reads_config_from_default_data_dir(
@@ -68,7 +96,8 @@ providers:
     base_url: http://grobid.test:8070
     timeout_seconds: 30
   llm:
-    model: test-model
+    default:
+      model: test-model
 pipeline:
   metadata:
     first_pages: 4
@@ -90,7 +119,7 @@ pipeline:
     assert settings.providers.grobid.base_url == "http://grobid.test:8070"
     assert settings.providers.grobid.timeout_seconds == 30
     assert settings.pipeline.parsing.parser.value == "pymupdf"
-    assert settings.providers.llm.model == "test-model"
+    assert settings.providers.llm.default.model == "test-model"
     assert settings.pipeline.summarization.strategy.value == "hierarchical"
     assert settings.pipeline.summarization.chunk_max_input_tokens == 8000
     assert settings.pipeline.outlining.max_output_tokens == 4000

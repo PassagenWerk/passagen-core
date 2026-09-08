@@ -36,15 +36,14 @@ providers:
     base_url: http://localhost:8070
     timeout_seconds: 60
   llm:
-    base_url: https://api.deepseek.com/v1
-    model: deepseek-flash-v4
-    api_key_env: PASSAGEN_API_KEY
-    timeout_seconds: 120
-    disable_thinking: false
-    context_window_tokens: 128000
-    max_context_utilization: 0.65
-    safety_margin_tokens: 8000
-    chars_per_token: 4.0
+    default:
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-flash-v4
+      api_key_env: PASSAGEN_API_KEY
+      timeout_seconds: 120
+      max_context_window: 128000
+      flavor: deepseek
+      reasoning: disable
 
 pipeline:
   metadata:
@@ -84,7 +83,7 @@ pipeline:
 POST https://api.deepseek.com/v1/chat/completions
 ```
 
-API key 只从 `providers.llm.api_key_env` 指定的环境变量读取：
+API key 只从 `providers.llm.default.api_key_env` 指定的环境变量读取：
 
 ```bash
 export PASSAGEN_API_KEY=your-deepseek-api-key
@@ -93,10 +92,43 @@ export PASSAGEN_API_KEY=your-deepseek-api-key
 不要把 key 写入 YAML。Passagen 不会在配置输出、普通日志、数据库或诊断 artifact 中保存
 key。环境变量必须在启动 CLI 命令或 Web 服务的同一个 shell 中设置。
 
-`context_window_tokens` 必须与实际模型能力一致。Passagen 使用
-`max_context_utilization`、`safety_margin_tokens` 和 `chars_per_token` 估算可用输入预算。
-如果替换为另一个 OpenAI-compatible 服务，应同时修改 `base_url`、`model` 和上下文参数。
-直连 `deepseek.com` 时，Passagen 会禁用 thinking，以避免 reasoning token 占用结构化输出预算。
+`max_context_window` 必须与实际模型能力一致。`flavor` 决定请求使用 `deepseek` 的
+`thinking` 参数还是 `openai` 的 reasoning 参数；不会根据 URL 猜测。`reasoning` 必须显式设置为
+`enable` 或 `disable`。如果替换模型，应同时检查 `base_url`、`model`、`flavor` 和上下文窗口。
+
+## 多模型路由
+
+默认情况下，所有任务都使用 `llm.default`。高级配置可以定义完整的额外 profile，并只路由需要
+不同模型的任务；没有出现在 `tasks` 中的任务仍使用默认配置：
+
+```yaml
+providers:
+  llm:
+    default:
+      base_url: https://api.deepseek.com/v1
+      model: fast-model
+      api_key_env: PASSAGEN_API_KEY
+      timeout_seconds: 120
+      max_context_window: 128000
+      flavor: deepseek
+      reasoning: disable
+    profiles:
+      reasoning:
+        base_url: https://api.deepseek.com/v1
+        model: reasoning-model
+        api_key_env: PASSAGEN_API_KEY
+        timeout_seconds: 180
+        max_context_window: 128000
+        flavor: deepseek
+        reasoning: enable
+    tasks:
+      summary_synthesis: reasoning
+      qa_answer: reasoning
+```
+
+可路由任务为 `abstract_cleanup`、`summary_evidence`、`summary_reduce`、
+`summary_synthesis`、`summary_repair`、`outline_synthesis`、`qa_rewrite`、`qa_answer` 和
+`qa_repair`。Profile 必须完整配置；`default` 是保留名称，不能出现在 `profiles` 中。
 
 ## GROBID 和 PDF Parser
 
@@ -218,7 +250,7 @@ Abstract clean 保留原始 Author Abstract，失败只产生 warning。单独�
 配置支持以 `PASSAGEN_` 开头、双下划线分隔层级的环境变量。例如：
 
 ```bash
-export PASSAGEN_PROVIDERS__LLM__MODEL=deepseek-flash-v4
+export PASSAGEN_PROVIDERS__LLM__DEFAULT__MODEL=deepseek-flash-v4
 export PASSAGEN_PIPELINE__PARSING__PARSER=pymupdf
 ```
 

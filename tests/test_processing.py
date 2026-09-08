@@ -104,12 +104,12 @@ def test_start_update_persists_queued_run_with_snapshot(tmp_path: Path) -> None:
     snapshot = json.loads((data_dir / "runs" / run.id / "run.json").read_text())
     assert snapshot["run_id"] == run.id
     assert snapshot["paper_ids"] == [paper_id]
-    assert snapshot["config"]["providers"]["llm"]["model"]
+    assert snapshot["config"]["providers"]["llm"]["default"]["model"]
     assert snapshot["config"]["prompts"]["summary"]
     # Only the API key environment variable *name* is recorded, never a key value.
-    assert snapshot["config"]["providers"]["llm"]["api_key_env"] == "PASSAGEN_API_KEY"
+    assert snapshot["config"]["providers"]["llm"]["default"]["api_key_env"] == "PASSAGEN_API_KEY"
     assert "api_key" not in {
-        key for key in snapshot["config"]["providers"]["llm"] if key != "api_key_env"
+        key for key in snapshot["config"]["providers"]["llm"]["default"] if key != "api_key_env"
     }
 
 

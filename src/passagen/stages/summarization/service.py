@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from passagen.config import LlmSettings, SummarizationSettings, SummarizationStrategy
+from passagen.config import LlmPurpose, LlmSettings, SummarizationSettings, SummarizationStrategy
 from passagen.domain import PaperStatus
 from passagen.parsing import ParsedPaper
 from passagen.prompting import (
@@ -25,11 +25,12 @@ from passagen.providers import (
     LlmProviderError,
     LlmResponse,
     LlmStage,
-    OpenAICompatibleProvider,
     ProviderHealthSnapshot,
     ProviderUnavailableError,
     TokenBudget,
     TrackedLlmProvider,
+    llm_health_key,
+    resolve_llm_provider,
     retry_truncated_response,
 )
 from passagen.stages.progress import ProgressCallback, report_progress
@@ -71,6 +72,54 @@ class SummaryResult:
     artifact: ArtifactRecord | None
     summary: StructuredSummary | None
     updated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _SummaryProviders:
+    evidence: TrackedLlmProvider
+    reduce: TrackedLlmProvider
+    synthesis: TrackedLlmProvider
+    repair: TrackedLlmProvider
+    evidence_budget: TokenBudget
+    reduce_budget: TokenBudget
+    synthesis_budget: TokenBudget
+    health_keys: tuple[str, ...]
+
+
+def _summary_providers(
+    settings: LlmSettings,
+    override: LlmProvider | None,
+    stats: LlmCallStats | None,
+) -> _SummaryProviders:
+    def resolve(purpose: LlmPurpose) -> tuple[TrackedLlmProvider, TokenBudget, str]:
+        selected = resolve_llm_provider(settings, purpose, override)
+        return (
+            TrackedLlmProvider(
+                selected.provider,
+                stats,
+                profile_name=selected.profile_name,
+                purpose=purpose,
+            ),
+            TokenBudget.from_settings(selected.settings),
+            llm_health_key(selected.profile_name),
+        )
+
+    evidence, evidence_budget, evidence_health = resolve(LlmPurpose.SUMMARY_EVIDENCE)
+    reduce, reduce_budget, reduce_health = resolve(LlmPurpose.SUMMARY_REDUCE)
+    synthesis, synthesis_budget, synthesis_health = resolve(LlmPurpose.SUMMARY_SYNTHESIS)
+    repair, _repair_budget, repair_health = resolve(LlmPurpose.SUMMARY_REPAIR)
+    return _SummaryProviders(
+        evidence=evidence,
+        reduce=reduce,
+        synthesis=synthesis,
+        repair=repair,
+        evidence_budget=evidence_budget,
+        reduce_budget=reduce_budget,
+        synthesis_budget=synthesis_budget,
+        health_keys=tuple(
+            dict.fromkeys((evidence_health, reduce_health, synthesis_health, repair_health))
+        ),
+    )
 
 
 def summarize_paper(
@@ -116,22 +165,25 @@ def summarize_paper(
     except PromptTemplateError as exc:
         raise SummaryError(str(exc)) from exc
 
+    try:
+        llms = _summary_providers(settings, provider, llm_stats)
+    except LlmProviderError as exc:
+        raise SummaryError(str(exc)) from exc
     if provider_health is not None:
         try:
-            provider_health.require("llm")
+            for health_key in llms.health_keys:
+                provider_health.require(health_key)
         except ProviderUnavailableError as exc:
             raise SummaryError(str(exc)) from exc
-    llm = TrackedLlmProvider(provider or OpenAICompatibleProvider(settings), llm_stats)
     run_id = start_processing_run(database_path, paper_id, "summarize")
     evidence_dir = data_dir / "papers" / paper_id / "summary" / "evidence"
     call_log_dir = (
         execution_log_dir / "external" / "llm" / paper_id if execution_log_dir is not None else None
     )
-    budget = TokenBudget.from_settings(settings)
     try:
         strategy = _resolve_strategy(
             summarization.strategy,
-            budget,
+            llms.synthesis_budget,
             prompts.full,
             paper,
             parsed,
@@ -150,7 +202,8 @@ def summarize_paper(
                 paper,
                 prompts.full,
                 prompts.repair,
-                llm,
+                llms.synthesis,
+                llms.repair,
                 database_path,
                 run_id,
                 call_log_dir,
@@ -162,8 +215,7 @@ def summarize_paper(
                 parsed,
                 paper,
                 prompts,
-                budget,
-                llm,
+                llms,
                 database_path,
                 run_id,
                 call_log_dir,
@@ -241,6 +293,7 @@ def _summarize_full(
     full_template: PromptTemplate,
     repair_template: PromptTemplate,
     provider: TrackedLlmProvider,
+    repair_provider: TrackedLlmProvider,
     database_path: Path,
     run_id: str,
     call_log_dir: Path | None,
@@ -260,7 +313,7 @@ def _summarize_full(
     )
     return _validate_or_repair(
         raw_response.content,
-        provider,
+        repair_provider,
         database_path,
         run_id,
         call_log_dir,
@@ -274,8 +327,7 @@ def _summarize_hierarchical(
     parsed: ParsedPaper,
     paper: PaperRecord,
     prompts: SummaryPromptTemplates,
-    budget: TokenBudget,
-    provider: TrackedLlmProvider,
+    providers: _SummaryProviders,
     database_path: Path,
     run_id: str,
     call_log_dir: Path | None,
@@ -283,14 +335,16 @@ def _summarize_hierarchical(
     summarization: SummarizationSettings,
     progress: ProgressCallback | None,
 ) -> StructuredSummary:
-    overhead = budget.estimate_tokens(prompts.evidence.render(schema=_evidence_schema(), chunk=""))
+    overhead = providers.evidence_budget.estimate_tokens(
+        prompts.evidence.render(schema=_evidence_schema(), chunk="")
+    )
     try:
         chunks = build_chunks(
             parsed,
             max_input_tokens=summarization.chunk_max_input_tokens,
             prompt_overhead_tokens=overhead,
             overlap_paragraphs=summarization.chunk_overlap_paragraphs,
-            measure=budget.estimate_tokens,
+            measure=providers.evidence_budget.estimate_tokens,
         )
     except ValueError as exc:
         raise SummaryError(str(exc)) from exc
@@ -304,7 +358,7 @@ def _summarize_hierarchical(
             evidence_dir,
             summarization.fact_max_output_tokens,
             call_log_dir,
-            provider,
+            providers.evidence,
             database_path,
             run_id,
             progress,
@@ -319,14 +373,14 @@ def _summarize_hierarchical(
         len(merged),
     )
     prompt = _summary_prompt(prompts.summary, paper, merged)
-    if not budget.fits(prompt, summarization.summary_max_output_tokens):
+    if not providers.synthesis_budget.fits(prompt, summarization.summary_max_output_tokens):
         report_progress(progress, "Condensing evidence to fit the summary budget...")
         merged = merge_evidence(
             _condense_evidence(
                 merged,
                 prompts.reduce,
-                budget,
-                provider,
+                providers.reduce_budget,
+                providers.reduce,
                 database_path,
                 run_id,
                 call_log_dir,
@@ -334,14 +388,14 @@ def _summarize_hierarchical(
             )
         )
         prompt = _summary_prompt(prompts.summary, paper, merged)
-        if not budget.fits(prompt, summarization.summary_max_output_tokens):
+        if not providers.synthesis_budget.fits(prompt, summarization.summary_max_output_tokens):
             raise SummaryError(
                 "Condensed evidence still exceeds the summary context budget; "
                 "increase the providers.llm budget settings"
             )
     report_progress(progress, "Generating structured summary...")
     raw_response = _generate(
-        provider,
+        providers.synthesis,
         prompt,
         database_path,
         run_id,
@@ -352,7 +406,7 @@ def _summarize_hierarchical(
     )
     return _validate_or_repair(
         raw_response.content,
-        provider,
+        providers.repair,
         database_path,
         run_id,
         call_log_dir,
@@ -563,6 +617,8 @@ def _generate(
 ) -> LlmResponse:
     diagnostic = {
         "label": label,
+        "purpose": provider.purpose.value if provider.purpose is not None else None,
+        "profile": provider.profile_name,
         "provider": provider.provider_name,
         "model": provider.model,
         "max_tokens": max_tokens,

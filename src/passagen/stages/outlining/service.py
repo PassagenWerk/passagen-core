@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from passagen.config import LlmSettings, OutliningSettings
+from passagen.config import LlmPurpose, LlmSettings, OutliningSettings
 from passagen.domain import PaperStatus
 from passagen.prompting import (
     PromptTemplate,
@@ -21,10 +21,11 @@ from passagen.providers import (
     LlmProvider,
     LlmProviderError,
     LlmStage,
-    OpenAICompatibleProvider,
     ProviderHealthSnapshot,
     ProviderUnavailableError,
     TrackedLlmProvider,
+    llm_health_key,
+    resolve_llm_provider,
 )
 from passagen.stages.outlining.schema import (
     _SECTIONS,
@@ -105,13 +106,20 @@ def outline_paper(
     except PromptTemplateError as exc:
         raise OutlineError(str(exc)) from exc
 
+    profile_name, _profile = settings.resolve(LlmPurpose.OUTLINE_SYNTHESIS)
     if provider_health is not None:
         try:
-            provider_health.require("llm")
+            provider_health.require(llm_health_key(profile_name))
         except ProviderUnavailableError as exc:
             raise OutlineError(str(exc)) from exc
     try:
-        llm = TrackedLlmProvider(provider or OpenAICompatibleProvider(settings), llm_stats)
+        resolved = resolve_llm_provider(settings, LlmPurpose.OUTLINE_SYNTHESIS, provider)
+        llm = TrackedLlmProvider(
+            resolved.provider,
+            llm_stats,
+            profile_name=resolved.profile_name,
+            purpose=LlmPurpose.OUTLINE_SYNTHESIS,
+        )
     except LlmProviderError as exc:
         raise OutlineError(str(exc)) from exc
     run_id = start_processing_run(database_path, paper_id, "outline")

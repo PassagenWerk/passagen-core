@@ -60,12 +60,12 @@ from passagen.assistant.schemas import (
 )
 from passagen.assistant.snapshots import build_paper_snapshot
 from passagen.assistant.versions import ANSWER_SCHEMA_VERSION, QA_PROMPT_VERSION
-from passagen.config import LlmSettings
+from passagen.config import LlmPurpose, LlmSettings
 from passagen.external.llm import LlmProvider, LlmProviderError, LlmResponse
 from passagen.parsing import ParsedPaper
 from passagen.prompting.templates import QaPromptTemplates, load_qa_prompt_templates
 from passagen.providers.budget import TokenBudget
-from passagen.providers.llm import OpenAICompatibleProvider, retry_truncated_response
+from passagen.providers.llm import resolve_llm_provider, retry_truncated_response
 from passagen.stages.summarization.schema import StructuredSummary
 from passagen.storage.files import atomic_write_bytes
 from passagen.storage.repository import get_artifact
@@ -96,7 +96,8 @@ class ConversationService:
         self.provider = provider
         self.answer_max_output_tokens = answer_max_output_tokens
         self.rewrite_max_output_tokens = rewrite_max_output_tokens
-        self.budget = TokenBudget.from_settings(settings)
+        _answer_profile_name, answer_profile = settings.resolve(LlmPurpose.QA_ANSWER)
+        self.budget = TokenBudget.from_settings(answer_profile)
 
     def create_conversation(self, paper_id: str, *, title: str | None = None) -> Conversation:
         return repository.create_conversation(
@@ -438,7 +439,7 @@ class ConversationService:
             paper.paper_id,
             parsed,
             artifact_sha256=artifact.sha256,
-            chars_per_token=self.settings.chars_per_token,
+            chars_per_token=self.budget.chars_per_token,
         )
         return retrieval.search(
             plan.retrieval_queries,
@@ -536,19 +537,28 @@ class ConversationService:
         *,
         max_tokens: int,
     ) -> LlmResponse:
-        if not self.budget.fits(prompt, max_tokens):
+        purpose = {
+            GenerationStage.REWRITE: LlmPurpose.QA_REWRITE,
+            GenerationStage.ANSWER: LlmPurpose.QA_ANSWER,
+            GenerationStage.REPAIR: LlmPurpose.QA_REPAIR,
+        }[stage]
+        resolved = resolve_llm_provider(self.settings, purpose, self.provider)
+        budget = TokenBudget.from_settings(resolved.settings)
+        if not budget.fits(prompt, max_tokens):
             raise ContextPlanError(
                 f"{stage.value} prompt exceeds the configured LLM context budget"
             )
-        provider = self.provider
-        if provider is None:
-            provider = OpenAICompatibleProvider(self.settings)
+        provider = resolved.provider
         call_id = str(uuid.uuid4())
         diagnostic_dir = self.data_dir / "runs" / run_id / "llm" / call_id
         self._write_diagnostic(
             diagnostic_dir / "request.json",
             {
                 "stage": stage.value,
+                "purpose": purpose.value,
+                "profile": resolved.profile_name,
+                "flavor": resolved.settings.flavor.value,
+                "reasoning": resolved.settings.reasoning.value,
                 "provider": provider.provider_name,
                 "model": provider.model,
                 "max_tokens": max_tokens,

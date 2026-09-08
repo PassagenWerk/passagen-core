@@ -1,7 +1,14 @@
 import httpx
 import pytest
 
-from passagen.config import ArxivSettings, CrossrefSettings, OpenAlexSettings, ProvidersSettings
+from passagen.config import (
+    ArxivSettings,
+    CrossrefSettings,
+    LlmProfileSettings,
+    LlmSettings,
+    OpenAlexSettings,
+    ProvidersSettings,
+)
 from passagen.providers import (
     ProviderUnavailableError,
     check_parser_health,
@@ -71,3 +78,28 @@ def test_parser_health_only_probes_grobid(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert health.statuses["grobid"].available is True
     assert requested == ["http://localhost:8070/api/isalive"]
+
+
+def test_provider_health_checks_advanced_llm_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
+    requested: list[str] = []
+
+    def get(url: str, **_kwargs: object) -> httpx.Response:
+        requested.append(url)
+        return httpx.Response(200, text="true")
+
+    monkeypatch.setattr(httpx, "get", get)
+    settings = ProvidersSettings(
+        llm=LlmSettings(
+            profiles={
+                "qa": LlmProfileSettings(base_url="https://qa.test/v1"),
+            }
+        )
+    )
+
+    health = check_provider_health(settings)
+
+    assert health.statuses["llm:qa"].available is True
+    assert "https://qa.test/v1/models" in requested

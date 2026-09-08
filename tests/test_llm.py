@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from passagen.config import LlmSettings
+from passagen.config import LlmFlavor, LlmProfileSettings, LlmReasoning
 from passagen.external import LlmProviderError, OpenAICompatibleProvider
 
 
@@ -26,7 +26,9 @@ def test_openai_compatible_provider_sends_json_request(monkeypatch: pytest.Monke
         )
 
     client = httpx.Client(transport=httpx.MockTransport(respond))
-    provider = OpenAICompatibleProvider(LlmSettings(base_url="https://llm.test/v1"), client=client)
+    provider = OpenAICompatibleProvider(
+        LlmProfileSettings(base_url="https://llm.test/v1"), client=client
+    )
 
     response = provider.generate("summarize", max_tokens=1000)
 
@@ -39,7 +41,7 @@ def test_openai_compatible_provider_requires_api_key(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("PASSAGEN_API_KEY", raising=False)
 
     with pytest.raises(LlmProviderError, match="PASSAGEN_API_KEY"):
-        OpenAICompatibleProvider(LlmSettings())
+        OpenAICompatibleProvider(LlmProfileSettings())
 
 
 def test_deepseek_provider_disables_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,7 +64,7 @@ def test_deepseek_provider_disables_thinking(monkeypatch: pytest.MonkeyPatch) ->
 
     client = httpx.Client(transport=httpx.MockTransport(respond))
     provider = OpenAICompatibleProvider(
-        LlmSettings(base_url="https://api.deepseek.com"), client=client
+        LlmProfileSettings(base_url="https://api.deepseek.com"), client=client
     )
 
     response = provider.generate("summarize", max_tokens=1000)
@@ -71,18 +73,38 @@ def test_deepseek_provider_disables_thinking(monkeypatch: pytest.MonkeyPatch) ->
     assert response.finish_reason == "stop"
 
 
-def test_configured_provider_disables_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flavor_controls_reasoning_without_inspecting_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
 
     def respond(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        assert payload["thinking"] == {"type": "disabled"}
+        assert payload["thinking"] == {"type": "enabled"}
         return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
     client = httpx.Client(transport=httpx.MockTransport(respond))
     provider = OpenAICompatibleProvider(
-        LlmSettings(base_url="https://litellm.test/v1", disable_thinking=True), client=client
+        LlmProfileSettings(
+            base_url="https://litellm.test/v1",
+            flavor=LlmFlavor.DEEPSEEK,
+            reasoning=LlmReasoning.ENABLE,
+        ),
+        client=client,
     )
+
+    assert provider.generate("summarize", max_tokens=1000).content == "{}"
+
+
+def test_openai_flavor_uses_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert "thinking" not in payload
+        assert payload["reasoning_effort"] == "none"
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    provider = OpenAICompatibleProvider(LlmProfileSettings(flavor=LlmFlavor.OPENAI), client=client)
 
     assert provider.generate("summarize", max_tokens=1000).content == "{}"
 
@@ -101,7 +123,7 @@ def test_empty_response_reports_completion_details(monkeypatch: pytest.MonkeyPat
         },
     )
     client = httpx.Client(transport=httpx.MockTransport(lambda _request: response))
-    provider = OpenAICompatibleProvider(LlmSettings(), client=client)
+    provider = OpenAICompatibleProvider(LlmProfileSettings(), client=client)
 
     with pytest.raises(
         LlmProviderError,

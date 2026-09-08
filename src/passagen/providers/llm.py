@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from passagen.config import LlmProfileSettings, LlmPurpose, LlmSettings
 from passagen.external.llm import (
     LlmProvider,
     LlmProviderError,
@@ -12,6 +13,26 @@ from passagen.external.llm import (
 )
 
 OpenAICompatibleProvider = ExternalOpenAICompatibleProvider
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedLlmProvider:
+    profile_name: str
+    settings: LlmProfileSettings
+    provider: LlmProvider
+
+
+def resolve_llm_provider(
+    settings: LlmSettings,
+    purpose: LlmPurpose,
+    override: LlmProvider | None = None,
+) -> ResolvedLlmProvider:
+    profile_name, profile = settings.resolve(purpose)
+    return ResolvedLlmProvider(
+        profile_name=profile_name,
+        settings=profile,
+        provider=override or OpenAICompatibleProvider(profile),
+    )
 
 
 class LlmStage(StrEnum):
@@ -60,9 +81,18 @@ class LlmCallStats:
 class TrackedLlmProvider:
     """Wrap an LLM provider so external-call accounting stays outside pipeline stages."""
 
-    def __init__(self, provider: LlmProvider, stats: LlmCallStats | None = None) -> None:
+    def __init__(
+        self,
+        provider: LlmProvider,
+        stats: LlmCallStats | None = None,
+        *,
+        profile_name: str = "default",
+        purpose: LlmPurpose | None = None,
+    ) -> None:
         self.provider = provider
         self.stats = stats or LlmCallStats()
+        self.profile_name = profile_name
+        self.purpose = purpose
 
     @property
     def provider_name(self) -> str:

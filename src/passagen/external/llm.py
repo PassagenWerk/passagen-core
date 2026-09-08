@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from passagen.config import LlmSettings
+from passagen.config import LlmFlavor, LlmProfileSettings, LlmReasoning
 
 
 class LlmProviderError(RuntimeError):
@@ -32,11 +32,12 @@ class LlmProvider(Protocol):
 class OpenAICompatibleProvider:
     provider_name = "openai_compatible"
 
-    def __init__(self, settings: LlmSettings, *, client: httpx.Client | None = None) -> None:
+    def __init__(self, settings: LlmProfileSettings, *, client: httpx.Client | None = None) -> None:
         self.base_url = settings.base_url.rstrip("/")
         self.model = settings.model
         self.timeout_seconds = settings.timeout_seconds
-        self.disable_thinking = settings.disable_thinking
+        self.flavor = settings.flavor
+        self.reasoning = settings.reasoning
         self.api_key = os.environ.get(settings.api_key_env)
         self.client = client
         if not self.api_key:
@@ -52,8 +53,14 @@ class OpenAICompatibleProvider:
             "response_format": {"type": "json_object"},
             "max_tokens": max_tokens,
         }
-        if self.disable_thinking or "deepseek.com" in self.base_url:
-            payload["thinking"] = {"type": "disabled"}
+        if self.flavor is LlmFlavor.DEEPSEEK:
+            payload["thinking"] = {
+                "type": "enabled" if self.reasoning is LlmReasoning.ENABLE else "disabled"
+            }
+        else:
+            payload["reasoning_effort"] = (
+                "medium" if self.reasoning is LlmReasoning.ENABLE else "none"
+            )
         try:
             response = self._post(payload)
             response.raise_for_status()

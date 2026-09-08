@@ -9,30 +9,22 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from passagen.config import LlmSettings
+from passagen.config import LlmProfileSettings
 
 
 @dataclass(frozen=True, slots=True)
 class TokenBudget:
     context_window_tokens: int
-    max_context_utilization: float
-    safety_margin_tokens: int
-    chars_per_token: float
+    chars_per_token: float = 4.0
 
     @classmethod
-    def from_settings(cls, settings: LlmSettings) -> TokenBudget:
-        return cls(
-            context_window_tokens=settings.context_window_tokens,
-            max_context_utilization=settings.max_context_utilization,
-            safety_margin_tokens=settings.safety_margin_tokens,
-            chars_per_token=settings.chars_per_token,
-        )
+    def from_settings(cls, settings: LlmProfileSettings) -> TokenBudget:
+        return cls(context_window_tokens=settings.max_context_window)
 
     @property
     def usable_input_tokens(self) -> int:
         """Input tokens available after utilization cap and safety margin."""
-        window = math.floor(self.context_window_tokens * self.max_context_utilization)
-        return max(0, window - self.safety_margin_tokens)
+        return self.context_window_tokens
 
     def estimate_tokens(self, text: str) -> int:
         return math.ceil(len(text) / self.chars_per_token)
