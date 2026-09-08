@@ -8,6 +8,8 @@ All notable changes to Passagen Core are documented in this file.
 
 - Aligned the default context and generation budgets with the 1M-context
   `deepseek-flash-v4` default model.
+- Updated the built-in QA answer prompt to request thorough, structured responses and removed
+  obsolete bundled QA prompt versions.
 
 ### Fixed
 

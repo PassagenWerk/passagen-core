@@ -96,7 +96,7 @@ def load_qa_prompt_templates(
             variables={"schema", "history", "question"},
         ),
         answer=load_prompt_template(
-            "qa-answer-v3.txt",
+            "qa-answer-v4.txt",
             answer_path,
             variables={"schema", "question", "context"},
         ),

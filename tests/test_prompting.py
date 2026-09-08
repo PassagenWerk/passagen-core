@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from passagen.prompting import PromptTemplateError, load_prompt_template
+from passagen.prompting import PromptTemplateError, load_prompt_template, load_qa_prompt_templates
 
 
 def test_builtin_prompt_validates_and_renders_declared_variables() -> None:
@@ -44,3 +44,11 @@ def test_prompt_render_requires_exact_variables() -> None:
 
     with pytest.raises(PromptTemplateError, match="missing variables: summary"):
         template.render(schema="{}")
+
+
+def test_qa_answer_prompt_requests_a_detailed_response() -> None:
+    templates = load_qa_prompt_templates()
+
+    assert templates.answer.name == "qa-answer-v4.txt"
+    assert "Give a thorough, structured answer" in templates.answer.content
+    assert "Do not shorten the answer merely for concision" in templates.answer.content
