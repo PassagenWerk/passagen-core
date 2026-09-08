@@ -27,6 +27,15 @@ All notable changes to Passagen Core are documented in this file.
 
 ### Added
 
+- Phase 3 assistant foundation: schema version 8 materializes parsed paper sections into an
+  FTS5 index, keeps the index transactionally aligned with parsed artifact metadata, and lazily
+  indexes existing libraries. Exact same-scope questions with compatible source fingerprints
+  now reuse a citation-validated answer without another answer-model call; callers can persist a
+  force-regenerate policy, inspect generated/reused disposition, and compute structured stale
+  reasons. Bounded same-paper candidates receive one conservative semantic decision: only
+  high-confidence equivalents are reused, while high-confidence partial matches are supplied as
+  previous-QA context for a new answer. Queued turns reject changed sources rather than
+  attributing new content to an old snapshot.
 - `passagen.assistant` asynchronous turn execution for the Web adapter (Phase 2 support):
   `submit_turn` persists the question and queues a generation run, `execute_turn` runs a queued
   or claimed turn from its submission-time source snapshot, `claim_next_queued_run` backs the

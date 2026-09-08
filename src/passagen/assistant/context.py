@@ -6,6 +6,7 @@ must copy, so generated citations can be validated against the source snapshot.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -17,6 +18,7 @@ from passagen.assistant.schemas import (
     ContextSource,
     Message,
     PaperSourceSnapshot,
+    QaRecord,
 )
 from passagen.providers.budget import TokenBudget
 from passagen.stages.summarization.schema import StructuredSummary
@@ -25,6 +27,7 @@ _HISTORY_SHARE = 0.15
 _SUMMARY_SHARE = 0.45
 _OUTLINE_SHARE = 0.20
 _RAW_SHARE = 0.40
+_PREVIOUS_QA_SHARE = 0.15
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,7 @@ def build_context(
     snapshot: PaperSourceSnapshot,
     plan: ContextPlan,
     history: Sequence[Message],
+    previous_qa: QaRecord | None,
     summary: StructuredSummary | None,
     outline: str | None,
     sections: Sequence[RetrievedSection],
@@ -72,6 +76,10 @@ def build_context(
     blocks: list[ContextBlock] = []
     if ContextSource.CONVERSATION in plan.sources and history:
         blocks.append(_history_block(history, budget, int(available * _HISTORY_SHARE)))
+    if ContextSource.PREVIOUS_QA in plan.sources:
+        if previous_qa is None or previous_qa.id != plan.reuse_qa_id:
+            raise ContextPlanError("the plan requires a matching previous QA record")
+        blocks.append(_previous_qa_block(previous_qa, budget, int(available * _PREVIOUS_QA_SHARE)))
     if ContextSource.SUMMARY in plan.sources:
         if summary is None:
             raise ContextPlanError("the plan requires the summary but it was not loaded")
@@ -122,6 +130,29 @@ def _history_block(history: Sequence[Message], budget: TokenBudget, token_cap: i
         used += tokens
     lines.reverse()
     return ContextBlock(ContextSource.CONVERSATION, "[source conversation]", "\n".join(lines))
+
+
+def _previous_qa_block(record: QaRecord, budget: TokenBudget, token_cap: int) -> ContextBlock:
+    content = json.dumps(
+        {
+            "question": record.standalone_question,
+            "answer": record.answer.model_dump(mode="json"),
+        },
+        ensure_ascii=False,
+    )
+    if budget.estimate_tokens(content) > token_cap:
+        answer = record.answer.answer_markdown
+        content = f"question: {record.standalone_question}\nanswer: {answer}"
+        while answer and budget.estimate_tokens(content) > token_cap:
+            answer = answer[: int(len(answer) * 0.9)]
+            content = f"question: {record.standalone_question}\nanswer: {answer}"
+    if budget.estimate_tokens(content) > token_cap:
+        raise ContextPlanError("the previous QA candidate does not fit the context token budget")
+    return ContextBlock(
+        ContextSource.PREVIOUS_QA,
+        f"[source previous_qa qa_record_id={record.id}]",
+        content,
+    )
 
 
 def _summary_block(

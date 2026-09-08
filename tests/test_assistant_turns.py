@@ -6,7 +6,7 @@ import pytest
 from support import FakeProvider, assistant_env, assistant_service, scripted_responder
 
 from passagen.assistant import repository
-from passagen.assistant.errors import AssistantNotFoundError, ScopeError
+from passagen.assistant.errors import AssistantNotFoundError, ScopeError, StaleSourceError
 from passagen.assistant.schemas import MessageStatus
 from passagen.storage.database import connect_database
 
@@ -32,7 +32,7 @@ def test_submit_turn_queues_and_execute_turn_completes(tmp_path: Path) -> None:
     assert turn.answer_message.status is MessageStatus.COMPLETED
 
 
-def test_queued_run_keeps_submission_snapshot(tmp_path: Path) -> None:
+def test_queued_run_rejects_changed_submission_snapshot(tmp_path: Path) -> None:
     env = assistant_env(tmp_path)
     provider = FakeProvider(scripted_responder(env))
     service = assistant_service(env, provider)
@@ -42,10 +42,12 @@ def test_queued_run_keeps_submission_snapshot(tmp_path: Path) -> None:
     with connect_database(env.database_path) as connection:
         connection.execute("UPDATE artifacts SET sha256 = ? WHERE id = 'art-summary'", ("0" * 64,))
 
-    turn = service.execute_turn(submission.run_id)
+    with pytest.raises(StaleSourceError):
+        service.execute_turn(submission.run_id)
 
-    assert turn.answer_message.status is MessageStatus.COMPLETED
-    assert turn.qa_record.answer.citations[0].artifact_sha256 == env.summary_sha
+    run = service.get_generation_run(submission.run_id)
+    assert run.status == "failed"
+    assert run.error_code == "stale_source"
 
 
 def test_archive_search_and_export_qa_record(tmp_path: Path) -> None:

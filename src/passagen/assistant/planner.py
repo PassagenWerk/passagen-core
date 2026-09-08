@@ -9,8 +9,11 @@ reproducible and testable offline.
 from __future__ import annotations
 
 import hashlib
+import unicodedata
+from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from passagen.assistant.schemas import (
     AnswerKind,
@@ -69,8 +72,37 @@ class RewriteResult(BaseModel):
     conversation_title: str | None = None
 
 
+class QaSemanticRelation(StrEnum):
+    EQUIVALENT = "equivalent"
+    PARTIAL = "partial"
+    DIFFERENT = "different"
+
+
+class QaSemanticMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    relation: QaSemanticRelation
+    confidence: Literal["low", "medium", "high"]
+
+
+class QaSemanticDecision(BaseModel):
+    """Bounded wire contract for comparing one question with QA candidates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    matches: list[QaSemanticMatch]
+
+    @model_validator(mode="after")
+    def _candidate_ids_are_unique(self) -> QaSemanticDecision:
+        ids = [match.candidate_id for match in self.matches]
+        if len(ids) != len(set(ids)):
+            raise ValueError("semantic candidate ids must be unique")
+        return self
+
+
 def normalize_question(question: str) -> str:
-    return " ".join(question.casefold().split())
+    return " ".join(unicodedata.normalize("NFKC", question).casefold().split())
 
 
 def question_hash(normalized_question: str) -> str:

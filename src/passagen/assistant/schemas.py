@@ -65,6 +65,24 @@ class GenerationRunStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class ReusePolicy(StrEnum):
+    AUTO = "auto"
+    FORCE_REGENERATE = "force_regenerate"
+
+
+class TurnDisposition(StrEnum):
+    GENERATED = "generated"
+    EXACT_REUSE = "exact_reuse"
+    SEMANTIC_REUSE = "semantic_reuse"
+
+
+class SourceStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stale: bool = False
+    reasons: list[NonBlankStr] = Field(default_factory=list)
+
+
 class GenerationStage(StrEnum):
     REWRITE = "rewrite"
     ROUTE = "route"

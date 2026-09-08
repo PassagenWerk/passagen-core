@@ -80,6 +80,7 @@ def load_outline_prompt_template(path: Path | None) -> PromptTemplate:
 @dataclass(frozen=True, slots=True)
 class QaPromptTemplates:
     rewrite: PromptTemplate
+    equivalence: PromptTemplate
     answer: PromptTemplate
     repair: PromptTemplate
 
@@ -88,12 +89,18 @@ def load_qa_prompt_templates(
     rewrite_path: Path | None = None,
     answer_path: Path | None = None,
     repair_path: Path | None = None,
+    equivalence_path: Path | None = None,
 ) -> QaPromptTemplates:
     return QaPromptTemplates(
         rewrite=load_prompt_template(
             "qa-rewrite-v2.txt",
             rewrite_path,
             variables={"schema", "history", "question"},
+        ),
+        equivalence=load_prompt_template(
+            "qa-equivalence-v1.txt",
+            equivalence_path,
+            variables={"schema", "question", "candidates"},
         ),
         answer=load_prompt_template(
             "qa-answer-v4.txt",

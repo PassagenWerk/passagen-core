@@ -17,6 +17,8 @@ ASSISTANT_TABLES = {
     "qa_citations",
     "generation_runs",
     "generation_llm_calls",
+    "paper_sections",
+    "paper_sections_fts",
 }
 
 

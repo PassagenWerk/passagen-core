@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -32,15 +33,23 @@ from passagen.assistant.errors import (
     ContextPlanError,
     ProviderCallError,
     ScopeError,
+    StaleSourceError,
 )
-from passagen.assistant.models import AssistantTurn, ConversationDetail, TurnSubmission
+from passagen.assistant.models import (
+    AssistantTurn,
+    ConversationDetail,
+    QaRecordView,
+    TurnSubmission,
+)
 from passagen.assistant.planner import (
+    QaSemanticDecision,
+    QaSemanticRelation,
     RewriteResult,
     deterministic_plan,
     normalize_question,
     question_hash,
 )
-from passagen.assistant.retrieval import InMemorySectionRetrieval, RetrievedSection
+from passagen.assistant.retrieval import FtsSectionRetrieval, RetrievedSection
 from passagen.assistant.schemas import (
     DEFAULT_CONVERSATION_TITLE,
     ContextPlan,
@@ -54,8 +63,11 @@ from passagen.assistant.schemas import (
     MessageStatus,
     PaperSourceSnapshot,
     QaRecord,
+    ReusePolicy,
     SourceSnapshot,
+    SourceStatus,
     StructuredAnswer,
+    TurnDisposition,
     source_fingerprint,
 )
 from passagen.assistant.snapshots import build_paper_snapshot
@@ -68,7 +80,11 @@ from passagen.providers.budget import TokenBudget
 from passagen.providers.llm import resolve_llm_provider, retry_truncated_response
 from passagen.stages.summarization.schema import StructuredSummary
 from passagen.storage.files import atomic_write_bytes
-from passagen.storage.repository import get_artifact
+from passagen.storage.repository import (
+    get_artifact,
+    paper_sections_artifact_sha,
+    replace_paper_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +147,22 @@ class ConversationService:
             raise AssistantNotFoundError(f"QA record not found: {qa_record_id}")
         return record
 
+    def get_qa_record_view(self, qa_record_id: str) -> QaRecordView:
+        record = self.get_qa_record(qa_record_id)
+        return QaRecordView(record, self.source_status(record))
+
+    def source_status(self, record: QaRecord) -> SourceStatus:
+        if record.source_snapshot.paper is None:
+            return SourceStatus(stale=True, reasons=["unsupported_scope"])
+        try:
+            current = build_paper_snapshot(
+                self.database_path, record.source_snapshot.paper.paper_id
+            )
+        except ScopeError:
+            return SourceStatus(stale=True, reasons=["source_missing"])
+        reasons = _snapshot_changes(record.source_snapshot, current)
+        return SourceStatus(stale=bool(reasons), reasons=reasons)
+
     def archive_qa_record(
         self, qa_record_id: str, *, title: str, tags: list[str] | None = None
     ) -> QaRecord:
@@ -192,11 +224,15 @@ class ConversationService:
     def interrupt_active_runs(self) -> int:
         return repository.interrupt_active_generation_runs(self.database_path)
 
-    def ask(self, conversation_id: str, question: str) -> AssistantTurn:
-        submission = self.submit_turn(conversation_id, question)
+    def ask(
+        self, conversation_id: str, question: str, *, force_regenerate: bool = False
+    ) -> AssistantTurn:
+        submission = self.submit_turn(conversation_id, question, force_regenerate=force_regenerate)
         return self.execute_turn(submission.run_id)
 
-    def submit_turn(self, conversation_id: str, question: str) -> TurnSubmission:
+    def submit_turn(
+        self, conversation_id: str, question: str, *, force_regenerate: bool = False
+    ) -> TurnSubmission:
         """Persist the user question and queue an answer run without executing it."""
 
         if not question.strip():
@@ -214,6 +250,7 @@ class ConversationService:
             conversation_id=conversation_id,
             source_snapshot_json=snapshot.model_dump_json(),
             question=question.strip(),
+            reuse_policy=(ReusePolicy.FORCE_REGENERATE if force_regenerate else ReusePolicy.AUTO),
         )
         return TurnSubmission(conversation_id, run_id, question_message, answer_message)
 
@@ -234,8 +271,13 @@ class ConversationService:
             raise ScopeError(f"Generation run {run_id} has no source snapshot")
         try:
             snapshot = SourceSnapshot.model_validate_json(run.source_snapshot_json)
-            record = self._run_turn(
-                conversation, snapshot, run_id, question_message, answer_message
+            record, disposition = self._run_turn(
+                conversation,
+                snapshot,
+                run_id,
+                question_message,
+                answer_message,
+                reuse_policy=run.reuse_policy,
             )
         except Exception as exc:
             code = exc.code if isinstance(exc, AssistantError) else "internal_error"
@@ -255,6 +297,7 @@ class ConversationService:
             question_message=by_id[question_message.id],
             answer_message=by_id[answer_message.id],
             qa_record=record,
+            disposition=disposition,
         )
 
     def _question_message_for(self, conversation_id: str, answer_message_id: str) -> Message:
@@ -274,15 +317,66 @@ class ConversationService:
         run_id: str,
         question_message: Message,
         answer_message: Message,
-    ) -> QaRecord:
+        *,
+        reuse_policy: ReusePolicy,
+    ) -> tuple[QaRecord, TurnDisposition]:
         paper = _require_paper_snapshot(snapshot)
+        current_snapshot = build_paper_snapshot(self.database_path, paper.paper_id)
+        if source_fingerprint(current_snapshot) != source_fingerprint(snapshot):
+            raise StaleSourceError(
+                f"Paper {paper.paper_id} sources changed after this run was submitted"
+            )
         prompts = load_qa_prompt_templates(
-            self.assistant_settings.rewrite_prompt_path,
-            self.assistant_settings.answer_prompt_path,
-            self.assistant_settings.repair_prompt_path,
+            rewrite_path=self.assistant_settings.rewrite_prompt_path,
+            equivalence_path=self.assistant_settings.equivalence_prompt_path,
+            answer_path=self.assistant_settings.answer_prompt_path,
+            repair_path=self.assistant_settings.repair_prompt_path,
         )
         history = self._recent_history(conversation.id, before_id=question_message.id)
         rewrite = self._rewrite(prompts, run_id, question_message.content, history)
+        normalized = normalize_question(rewrite.standalone_question)
+        normalized_hash = question_hash(normalized)
+        if reuse_policy is ReusePolicy.AUTO:
+            reused = self._reuse_exact(
+                conversation,
+                snapshot,
+                paper,
+                rewrite,
+                normalized,
+                normalized_hash,
+                run_id,
+                question_message,
+                answer_message,
+            )
+            if reused is not None:
+                return reused, TurnDisposition.EXACT_REUSE
+        semantic_candidate: QaRecord | None = None
+        semantic_relation: QaSemanticRelation | None = None
+        if reuse_policy is ReusePolicy.AUTO:
+            semantic_candidate, semantic_relation = self._semantic_candidate(
+                prompts,
+                run_id,
+                paper,
+                rewrite.standalone_question,
+                normalized_hash,
+            )
+            if (
+                semantic_candidate is not None
+                and semantic_relation is QaSemanticRelation.EQUIVALENT
+            ):
+                reused = self._reuse_record(
+                    conversation,
+                    snapshot,
+                    paper,
+                    rewrite,
+                    normalized,
+                    normalized_hash,
+                    run_id,
+                    question_message,
+                    answer_message,
+                    semantic_candidate,
+                )
+                return reused, TurnDisposition.SEMANTIC_REUSE
         available = _available_sources(paper)
         plan = deterministic_plan(
             standalone_question=rewrite.standalone_question,
@@ -292,6 +386,13 @@ class ConversationService:
             paper_id=paper.paper_id,
             available_sources=available,
         )
+        if semantic_candidate is not None and semantic_relation is QaSemanticRelation.PARTIAL:
+            plan = plan.model_copy(
+                update={
+                    "reuse_qa_id": semantic_candidate.id,
+                    "sources": [*plan.sources, ContextSource.PREVIOUS_QA],
+                }
+            )
         evidence = self._load_evidence(paper, plan)
         base_prompt_tokens = max(
             self.budget.estimate_tokens(
@@ -308,6 +409,9 @@ class ConversationService:
             snapshot=paper,
             plan=plan,
             history=history,
+            previous_qa=semantic_candidate
+            if semantic_relation is QaSemanticRelation.PARTIAL
+            else None,
             summary=evidence.summary,
             outline=evidence.outline,
             sections=sections,
@@ -316,7 +420,6 @@ class ConversationService:
             prompt_overhead_tokens=overhead,
         )
         answer = self._generate_answer(prompts, run_id, plan, context, evidence)
-        normalized = normalize_question(rewrite.standalone_question)
         record = QaRecord(
             id=str(uuid.uuid4()),
             conversation_id=conversation.id,
@@ -324,7 +427,7 @@ class ConversationService:
             answer_message_id=answer_message.id,
             standalone_question=rewrite.standalone_question,
             normalized_question=normalized,
-            normalized_question_hash=question_hash(normalized),
+            normalized_question_hash=normalized_hash,
             intent=plan.intent,
             context_plan=plan,
             answer=answer,
@@ -341,7 +444,199 @@ class ConversationService:
             run_id=run_id,
             conversation_title=_conversation_title(rewrite.conversation_title, conversation),
         )
+        return record, TurnDisposition.GENERATED
+
+    def _reuse_exact(
+        self,
+        conversation: Conversation,
+        snapshot: SourceSnapshot,
+        paper: PaperSourceSnapshot,
+        rewrite: RewriteResult,
+        normalized: str,
+        normalized_hash: str,
+        run_id: str,
+        question_message: Message,
+        answer_message: Message,
+    ) -> QaRecord | None:
+        candidates = repository.find_exact_qa_records(
+            self.database_path,
+            paper_id=paper.paper_id,
+            normalized_question=normalized,
+            normalized_question_hash=normalized_hash,
+        )
+        fingerprint = source_fingerprint(snapshot)
+        candidate = next(
+            (
+                item
+                for item in candidates
+                if self._candidate_is_compatible(item, paper, fingerprint)
+            ),
+            None,
+        )
+        if candidate is None:
+            return None
+        return self._reuse_record(
+            conversation,
+            snapshot,
+            paper,
+            rewrite,
+            normalized,
+            normalized_hash,
+            run_id,
+            question_message,
+            answer_message,
+            candidate,
+        )
+
+    def _reuse_record(
+        self,
+        conversation: Conversation,
+        snapshot: SourceSnapshot,
+        paper: PaperSourceSnapshot,
+        rewrite: RewriteResult,
+        normalized: str,
+        normalized_hash: str,
+        run_id: str,
+        question_message: Message,
+        answer_message: Message,
+        candidate: QaRecord,
+    ) -> QaRecord:
+        fingerprint = source_fingerprint(snapshot)
+        plan = ContextPlan(
+            standalone_question=rewrite.standalone_question,
+            intent=candidate.intent,
+            reuse_qa_id=candidate.id,
+            sources=[ContextSource.PREVIOUS_QA],
+            paper_ids=[paper.paper_id],
+            answer_kind=candidate.context_plan.answer_kind,
+        )
+        answer = candidate.answer.model_copy(
+            update={
+                "standalone_question": rewrite.standalone_question,
+                "intent": candidate.intent,
+            }
+        )
+        record = QaRecord(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            question_message_id=question_message.id,
+            answer_message_id=answer_message.id,
+            standalone_question=rewrite.standalone_question,
+            normalized_question=normalized,
+            normalized_question_hash=normalized_hash,
+            intent=candidate.intent,
+            context_plan=plan,
+            answer=answer,
+            source_snapshot=snapshot,
+            source_fingerprint=fingerprint,
+            prompt_version=QA_PROMPT_VERSION,
+            answer_schema_version=ANSWER_SCHEMA_VERSION,
+            created_at=answer_message.created_at,
+        )
+        repository.save_qa_turn(
+            self.database_path,
+            record=record,
+            answer_content=answer.answer_markdown,
+            run_id=run_id,
+            conversation_title=_conversation_title(rewrite.conversation_title, conversation),
+        )
         return record
+
+    def _semantic_candidate(
+        self,
+        prompts: QaPromptTemplates,
+        run_id: str,
+        paper: PaperSourceSnapshot,
+        question: str,
+        normalized_hash: str,
+    ) -> tuple[QaRecord | None, QaSemanticRelation | None]:
+        fingerprint = source_fingerprint(build_paper_snapshot(self.database_path, paper.paper_id))
+        pool = repository.find_qa_candidates(
+            self.database_path,
+            paper_id=paper.paper_id,
+            exclude_normalized_question_hash=normalized_hash,
+            pool_size=self.assistant_settings.qa_candidate_pool_size,
+        )
+        compatible = [
+            candidate
+            for candidate in pool
+            if self._candidate_is_compatible(candidate, paper, fingerprint)
+        ]
+        candidates = _rank_qa_candidates(question, compatible)[
+            : self.assistant_settings.max_qa_candidates
+        ]
+        if not candidates:
+            return None, None
+        candidate_json = json.dumps(
+            [
+                {
+                    "candidate_id": candidate.id,
+                    "question": candidate.standalone_question,
+                    "answer": candidate.answer.answer_markdown[:4_000],
+                }
+                for candidate in candidates
+            ],
+            ensure_ascii=False,
+        )
+        prompt = prompts.equivalence.render(
+            schema=json.dumps(QaSemanticDecision.model_json_schema(), ensure_ascii=False, indent=2),
+            question=question,
+            candidates=candidate_json,
+        )
+        try:
+            response = self._call_llm(
+                run_id,
+                GenerationStage.ROUTE,
+                prompt,
+                max_tokens=self.assistant_settings.equivalence_max_output_tokens,
+            )
+            decision = QaSemanticDecision.model_validate_json(response.content)
+        except (ProviderCallError, ContextPlanError, ValidationError) as exc:
+            logger.warning("Ignoring unusable QA semantic decision: %s", exc)
+            return None, None
+        by_id = {candidate.id: candidate for candidate in candidates}
+        if set(match.candidate_id for match in decision.matches) != set(by_id):
+            logger.warning("Ignoring QA semantic decision with incomplete candidate ids")
+            return None, None
+        for relation in (QaSemanticRelation.EQUIVALENT, QaSemanticRelation.PARTIAL):
+            match = next(
+                (
+                    item
+                    for item in decision.matches
+                    if item.relation is relation and item.confidence == "high"
+                ),
+                None,
+            )
+            if match is not None:
+                return by_id[match.candidate_id], relation
+        return None, None
+
+    def _candidate_is_compatible(
+        self, candidate: QaRecord, paper: PaperSourceSnapshot, fingerprint: str
+    ) -> bool:
+        if (
+            candidate.source_fingerprint != fingerprint
+            or candidate.prompt_version != QA_PROMPT_VERSION
+            or candidate.answer_schema_version != ANSWER_SCHEMA_VERSION
+        ):
+            return False
+        try:
+            evidence = self._evidence_for_answer(paper, candidate.answer)
+            validate_answer_citations(candidate.answer, evidence)
+        except (AssistantError, OSError, ValidationError):
+            return False
+        return True
+
+    def _evidence_for_answer(
+        self, paper: PaperSourceSnapshot, answer: StructuredAnswer
+    ) -> PaperEvidenceIndex:
+        kinds = {citation.artifact_kind.value for citation in answer.citations}
+        return PaperEvidenceIndex(
+            snapshot=paper,
+            summary=self._load_summary(paper.paper_id) if "summary_json" in kinds else None,
+            outline=self._load_outline(paper.paper_id) if "outline_md" in kinds else None,
+            parsed=self._load_parsed(paper.paper_id) if "extracted_json" in kinds else None,
+        )
 
     def _recent_history(self, conversation_id: str, *, before_id: str) -> list[Message]:
         messages = repository.list_messages(self.database_path, conversation_id)
@@ -437,9 +732,16 @@ class ConversationService:
         if parsed is None:
             raise ContextPlanError("the plan requires raw sections but they were not loaded")
         artifact = next(a for a in paper.artifacts if a.kind == "extracted_json")
-        retrieval = InMemorySectionRetrieval(
+        if paper_sections_artifact_sha(self.database_path, paper.paper_id) != artifact.sha256:
+            current = get_artifact(self.database_path, paper.paper_id, "extracted_json")
+            if current is None or current.sha256 != artifact.sha256:
+                raise StaleSourceError(
+                    f"Paper {paper.paper_id} extracted text changed after this run was submitted"
+                )
+            replace_paper_sections(self.database_path, paper.paper_id, current, parsed.sections)
+        retrieval = FtsSectionRetrieval(
+            self.database_path,
             paper.paper_id,
-            parsed,
             artifact_sha256=artifact.sha256,
             chars_per_token=self.budget.chars_per_token,
         )
@@ -547,6 +849,7 @@ class ConversationService:
     ) -> LlmResponse:
         purpose = {
             GenerationStage.REWRITE: LlmPurpose.QA_REWRITE,
+            GenerationStage.ROUTE: LlmPurpose.QA_EQUIVALENCE,
             GenerationStage.ANSWER: LlmPurpose.QA_ANSWER,
             GenerationStage.REPAIR: LlmPurpose.QA_REPAIR,
         }[stage]
@@ -650,9 +953,51 @@ def _answer_schema() -> str:
     return json.dumps(StructuredAnswer.model_json_schema(), ensure_ascii=False, indent=2)
 
 
+def _rank_qa_candidates(question: str, candidates: list[QaRecord]) -> list[QaRecord]:
+    terms = set(re.findall(r"[\w]+", normalize_question(question), flags=re.UNICODE))
+
+    def score(candidate: QaRecord) -> tuple[int, str, str]:
+        candidate_terms = set(re.findall(r"[\w]+", candidate.normalized_question, flags=re.UNICODE))
+        return (len(terms & candidate_terms), candidate.created_at, candidate.id)
+
+    return sorted(candidates, key=score, reverse=True)
+
+
 def _conversation_title(candidate: str | None, conversation: Conversation) -> str:
     if candidate is not None:
         title = " ".join(candidate.split()).strip("\"'")
         if title:
             return title[:80].rstrip()
     return conversation.created_at[:16]
+
+
+def _snapshot_changes(previous: SourceSnapshot, current: SourceSnapshot) -> list[str]:
+    if source_fingerprint(previous) == source_fingerprint(current):
+        return []
+    if previous.paper is None or current.paper is None:
+        return ["scope_changed"]
+    reasons: list[str] = []
+    if previous.paper.status != current.paper.status:
+        reasons.append("paper_status_changed")
+    previous_artifacts = {artifact.kind: artifact for artifact in previous.paper.artifacts}
+    current_artifacts = {artifact.kind: artifact for artifact in current.paper.artifacts}
+    for kind in sorted(previous_artifacts.keys() | current_artifacts.keys()):
+        old = previous_artifacts.get(kind)
+        new = current_artifacts.get(kind)
+        if old is None or new is None:
+            reasons.append(f"{kind}_availability_changed")
+        elif old.sha256 != new.sha256:
+            reasons.append(f"{kind}_content_changed")
+        elif old.schema_version != new.schema_version:
+            reasons.append(f"{kind}_schema_changed")
+        elif old.artifact_id != new.artifact_id:
+            reasons.append(f"{kind}_artifact_changed")
+    for field in (
+        "context_builder_version",
+        "retrieval_version",
+        "prompt_version",
+        "answer_schema_version",
+    ):
+        if getattr(previous, field) != getattr(current, field):
+            reasons.append(f"{field}_changed")
+    return reasons or ["source_fingerprint_changed"]

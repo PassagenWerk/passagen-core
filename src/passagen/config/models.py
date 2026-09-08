@@ -74,6 +74,7 @@ class LlmPurpose(StrEnum):
     SUMMARY_REPAIR = "summary_repair"
     OUTLINE_SYNTHESIS = "outline_synthesis"
     QA_REWRITE = "qa_rewrite"
+    QA_EQUIVALENCE = "qa_equivalence"
     QA_ANSWER = "qa_answer"
     QA_REPAIR = "qa_repair"
 
@@ -206,11 +207,15 @@ class AssistantSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rewrite_max_output_tokens: int = Field(default=1_024, ge=100)
+    equivalence_max_output_tokens: int = Field(default=1_024, ge=100)
+    max_qa_candidates: int = Field(default=3, ge=1, le=10)
+    qa_candidate_pool_size: int = Field(default=20, ge=1, le=100)
     answer_max_output_tokens: int = Field(default=8_192, ge=100)
     truncated_response_max_attempts: int = Field(default=3, ge=1, le=5)
     max_history_messages: int = Field(default=10, ge=0, le=100)
     max_raw_sections: int = Field(default=3, ge=1, le=20)
     rewrite_prompt_path: Path | None = None
+    equivalence_prompt_path: Path | None = None
     answer_prompt_path: Path | None = None
     repair_prompt_path: Path | None = None
 
@@ -369,7 +374,12 @@ def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
                     section_values[key] = str(base_dir / value)
     assistant = values.get("assistant")
     if isinstance(assistant, dict):
-        for key in ("rewrite_prompt_path", "answer_prompt_path", "repair_prompt_path"):
+        for key in (
+            "rewrite_prompt_path",
+            "equivalence_prompt_path",
+            "answer_prompt_path",
+            "repair_prompt_path",
+        ):
             value = assistant.get(key)
             if isinstance(value, str) and value and not Path(value).is_absolute():
                 assistant[key] = str(base_dir / value)

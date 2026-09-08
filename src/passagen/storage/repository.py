@@ -3,15 +3,22 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from passagen.domain import BibliographicMetadata, Paper, PaperStatus
+from passagen.parsing import ParsedSection
 from passagen.storage.engine import session_scope
-from passagen.storage.models import ArtifactRow, LlmCallRow, PaperRow, ProcessingRunRow
+from passagen.storage.models import (
+    ArtifactRow,
+    LlmCallRow,
+    PaperRow,
+    PaperSectionRow,
+    ProcessingRunRow,
+)
 
 
 class DatabaseNotInitializedError(RuntimeError):
@@ -209,12 +216,15 @@ def save_parsed_artifact(
     status: PaperStatus,
     abstract: str | None = None,
     abstract_source: str | None = None,
+    sections: tuple[ParsedSection, ...] | None = None,
 ) -> tuple[PaperRecord, ArtifactRecord]:
     _require_database(database_path)
     with session_scope(database_path) as session:
         artifact = _upsert_artifact(
             session, paper_id, "extracted_json", path, version, sha256, size_bytes
         )
+        if sections is not None:
+            _replace_paper_sections(session, paper_id, artifact, sections)
         if abstract and abstract_source:
             paper = session.get(PaperRow, paper_id)
             if paper is None:
@@ -234,6 +244,50 @@ def save_parsed_artifact(
         if paper is None:
             raise RuntimeError(f"Failed to reload parsed artifact for {paper_id}")
         return _paper_record(paper), artifact
+
+
+def replace_paper_sections(
+    database_path: Path,
+    paper_id: str,
+    artifact: ArtifactRecord,
+    sections: tuple[ParsedSection, ...],
+) -> None:
+    """Replace a paper's materialized section index in one transaction."""
+
+    _require_database(database_path)
+    with session_scope(database_path) as session:
+        _replace_paper_sections(session, paper_id, artifact, sections)
+
+
+def paper_sections_artifact_sha(database_path: Path, paper_id: str) -> str | None:
+    _require_database(database_path)
+    with session_scope(database_path) as session:
+        return session.scalar(
+            select(PaperSectionRow.extracted_artifact_sha256)
+            .where(PaperSectionRow.paper_id == paper_id)
+            .limit(1)
+        )
+
+
+def _replace_paper_sections(
+    session: Session,
+    paper_id: str,
+    artifact: ArtifactRecord,
+    sections: tuple[ParsedSection, ...],
+) -> None:
+    session.execute(delete(PaperSectionRow).where(PaperSectionRow.paper_id == paper_id))
+    session.add_all(
+        PaperSectionRow(
+            paper_id=paper_id,
+            ordinal=ordinal,
+            title=section.title,
+            text=section.text,
+            pages_json=json.dumps(list(section.pages)),
+            extracted_artifact_id=artifact.id,
+            extracted_artifact_sha256=artifact.sha256 or "",
+        )
+        for ordinal, section in enumerate(sections)
+    )
 
 
 def save_abstract_fix_artifact(

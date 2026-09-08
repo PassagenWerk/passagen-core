@@ -104,7 +104,7 @@ def test_follow_up_is_rewritten_and_uses_history(tmp_path: Path) -> None:
     conversation_id = _create(service)
     service.ask(conversation_id, "这篇论文做了哪些实验？")
 
-    turn = service.ask(conversation_id, "那它的第二个实验呢？")
+    turn = service.ask(conversation_id, "那它的第二个实验呢？", force_regenerate=True)
 
     assert turn.qa_record.standalone_question == "What was the second experiment?"
     assert turn.qa_record.context_plan.sources[0] is ContextSource.CONVERSATION

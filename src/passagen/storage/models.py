@@ -72,6 +72,27 @@ class ArtifactRow(Base):
     paper: Mapped[PaperRow] = relationship(back_populates="artifacts")
 
 
+class PaperSectionRow(Base):
+    __tablename__ = "paper_sections"
+    __table_args__ = (
+        UniqueConstraint("paper_id", "ordinal"),
+        CheckConstraint("ordinal >= 0"),
+        Index("ix_paper_sections_paper_id", "paper_id"),
+        Index("ix_paper_sections_artifact", "paper_id", "extracted_artifact_sha256"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    paper_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    pages_json: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_artifact_id: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class ProcessingRunRow(Base):
     __tablename__ = "processing_runs"
     __table_args__ = (Index("ix_processing_runs_paper_id", "paper_id"),)
@@ -348,6 +369,7 @@ class GenerationRunRow(Base):
         Text, ForeignKey("qa_records.id", ondelete="SET NULL")
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    reuse_policy: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'auto'"))
     source_snapshot_json: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)

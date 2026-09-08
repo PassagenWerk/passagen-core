@@ -1,7 +1,8 @@
 # Paper and Collection Research and Exploration
 
 **状态：进行中（Phase 0 已完成：contract、评估问题集与 migration 0006；Phase 1 已完成：单篇问答
-Core 垂直切片；Phase 2 已完成：单篇 Web 体验与结构化归档）**
+Core 垂直切片；Phase 2 已完成：单篇 Web 体验与结构化归档；Phase 3 已完成：FTS5、重复问题
+检测、复用与部分覆盖、force regenerate 和 stale）**
 
 本文档定义针对单篇 paper 和一组 paper（collection）的持久化对话问答、结构化问答归档、
 collection 总结与对比，以及按问题选择 summary、outline、raw context 和历史问答的能力。

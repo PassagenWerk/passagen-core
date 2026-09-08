@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from passagen.assistant.schemas import Conversation, Message, QaRecord
+from passagen.assistant.schemas import (
+    Conversation,
+    Message,
+    QaRecord,
+    SourceStatus,
+    TurnDisposition,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,3 +34,10 @@ class AssistantTurn:
     question_message: Message
     answer_message: Message
     qa_record: QaRecord
+    disposition: TurnDisposition = TurnDisposition.GENERATED
+
+
+@dataclass(frozen=True, slots=True)
+class QaRecordView:
+    record: QaRecord
+    source_status: SourceStatus

@@ -11,7 +11,12 @@ from passagen.assistant.errors import (
     ScopeError,
     StaleSourceError,
 )
-from passagen.assistant.models import AssistantTurn, ConversationDetail, TurnSubmission
+from passagen.assistant.models import (
+    AssistantTurn,
+    ConversationDetail,
+    QaRecordView,
+    TurnSubmission,
+)
 from passagen.assistant.schemas import (
     AnswerClaim,
     AnswerKind,
@@ -32,8 +37,11 @@ from passagen.assistant.schemas import (
     PaperSourceSnapshot,
     QaRecord,
     QuestionIntent,
+    ReusePolicy,
     SourceSnapshot,
+    SourceStatus,
     StructuredAnswer,
+    TurnDisposition,
     source_fingerprint,
 )
 from passagen.assistant.service import ConversationService
@@ -82,10 +90,14 @@ __all__ = [
     "ProviderCallError",
     "QaRecord",
     "QuestionIntent",
+    "QaRecordView",
+    "ReusePolicy",
     "ScopeError",
     "SourceSnapshot",
+    "SourceStatus",
     "StaleSourceError",
     "StructuredAnswer",
     "TurnSubmission",
+    "TurnDisposition",
     "source_fingerprint",
 ]

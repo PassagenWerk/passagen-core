@@ -21,6 +21,7 @@ from passagen.assistant.schemas import (
     MessageStatus,
     QaRecord,
     QuestionIntent,
+    ReusePolicy,
     SourceSnapshot,
     StructuredAnswer,
 )
@@ -59,6 +60,7 @@ class GenerationRunRecord:
     created_at: str
     started_at: str | None
     completed_at: str | None
+    reuse_policy: ReusePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +174,7 @@ def create_generation_run(
     conversation_id: str | None = None,
     source_snapshot_json: str | None = None,
     status: str = "running",
+    reuse_policy: ReusePolicy = ReusePolicy.AUTO,
 ) -> str:
     run_id = str(uuid.uuid4())
     with session_scope(database_path) as session:
@@ -183,6 +186,7 @@ def create_generation_run(
                 collection_id=collection_id,
                 conversation_id=conversation_id,
                 status=status,
+                reuse_policy=reuse_policy.value,
                 source_snapshot_json=source_snapshot_json,
                 started_at=_now(session) if status == "running" else None,
             )
@@ -198,6 +202,7 @@ def create_turn_submission(
     conversation_id: str,
     source_snapshot_json: str,
     question: str,
+    reuse_policy: ReusePolicy = ReusePolicy.AUTO,
 ) -> tuple[str, Message, Message]:
     """Atomically persist a queued run and its adjacent user/assistant messages."""
 
@@ -212,6 +217,7 @@ def create_turn_submission(
                 paper_id=paper_id,
                 conversation_id=conversation_id,
                 status="queued",
+                reuse_policy=reuse_policy.value,
                 source_snapshot_json=source_snapshot_json,
             )
         )
@@ -428,6 +434,52 @@ def get_qa_record_by_answer_message(database_path: Path, answer_message_id: str)
         return _qa_record(row) if row is not None else None
 
 
+def find_exact_qa_records(
+    database_path: Path,
+    *,
+    paper_id: str,
+    normalized_question: str,
+    normalized_question_hash: str,
+    limit: int = 5,
+) -> tuple[QaRecord, ...]:
+    with session_scope(database_path) as session:
+        rows = session.scalars(
+            select(QaRecordRow)
+            .join(ConversationRow, ConversationRow.id == QaRecordRow.conversation_id)
+            .where(
+                ConversationRow.paper_id == paper_id,
+                QaRecordRow.normalized_question_hash == normalized_question_hash,
+                QaRecordRow.normalized_question == normalized_question,
+            )
+            .order_by(QaRecordRow.created_at.desc(), QaRecordRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(_qa_record(row) for row in rows)
+
+
+def find_qa_candidates(
+    database_path: Path,
+    *,
+    paper_id: str,
+    exclude_normalized_question_hash: str,
+    pool_size: int,
+) -> tuple[QaRecord, ...]:
+    """Return a bounded, recent same-paper pool for in-memory lexical ranking."""
+
+    with session_scope(database_path) as session:
+        rows = session.scalars(
+            select(QaRecordRow)
+            .join(ConversationRow, ConversationRow.id == QaRecordRow.conversation_id)
+            .where(
+                ConversationRow.paper_id == paper_id,
+                QaRecordRow.normalized_question_hash != exclude_normalized_question_hash,
+            )
+            .order_by(QaRecordRow.created_at.desc(), QaRecordRow.id)
+            .limit(pool_size)
+        ).all()
+        return tuple(_qa_record(row) for row in rows)
+
+
 def list_qa_records(database_path: Path, conversation_id: str) -> tuple[QaRecord, ...]:
     with session_scope(database_path) as session:
         rows = session.scalars(
@@ -621,4 +673,5 @@ def _generation_run(row: GenerationRunRow) -> GenerationRunRecord:
         created_at=row.created_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
+        reuse_policy=ReusePolicy(row.reuse_policy),
     )
