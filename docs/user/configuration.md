@@ -41,7 +41,7 @@ providers:
       model: deepseek-flash-v4
       api_key_env: PASSAGEN_API_KEY
       timeout_seconds: 120
-      max_context_window: 128000
+      max_context_window: 1000000
       flavor: deepseek
       reasoning: disable
 
@@ -57,18 +57,28 @@ pipeline:
     prompt_path: null
   summarization:
     strategy: auto
-    chunk_max_input_tokens: 24000
+    chunk_max_input_tokens: 128000
     chunk_overlap_paragraphs: 1
-    fact_max_output_tokens: 1500
-    summary_max_output_tokens: 3000
+    fact_max_output_tokens: 6000
+    summary_max_output_tokens: 20000
     facts_prompt_path: null
     summary_prompt_path: null
     full_prompt_path: null
     reduce_prompt_path: null
     repair_prompt_path: null
   outlining:
-    max_output_tokens: 4000
+    max_output_tokens: 40000
     prompt_path: null
+
+assistant:
+  rewrite_max_output_tokens: 1024
+  answer_max_output_tokens: 8192
+  truncated_response_max_attempts: 3
+  max_history_messages: 10
+  max_raw_sections: 3
+  rewrite_prompt_path: null
+  answer_prompt_path: null
+  repair_prompt_path: null
 ```
 
 `database_path: null` 使用 `<data-dir>/passagen.db`。`data_dir` 只由 CLI/Web 参数提供，不能
@@ -95,6 +105,10 @@ key。环境变量必须在启动 CLI 命令或 Web 服务的同一个 shell 中
 `max_context_window` 必须与实际模型能力一致。`flavor` 决定请求使用 `deepseek` 的
 `thinking` 参数还是 `openai` 的 reasoning 参数；不会根据 URL 猜测。`reasoning` 必须显式设置为
 `enable` 或 `disable`。如果替换模型，应同时检查 `base_url`、`model`、`flavor` 和上下文窗口。
+
+默认 pipeline 预算按 `deepseek-flash-v4` 的 1M 上下文设置：完整论文优先单次总结，分层总结的
+单块输入上限为 128K，并为 summary 和 outline 保留较大的结构化输出空间。Abstract cleanup 和
+问题改写本身是短任务，因此其输出预算不会随上下文窗口等比例放大。
 
 ## 多模型路由
 
@@ -129,6 +143,20 @@ providers:
 可路由任务为 `abstract_cleanup`、`summary_evidence`、`summary_reduce`、
 `summary_synthesis`、`summary_repair`、`outline_synthesis`、`qa_rewrite`、`qa_answer` 和
 `qa_repair`。Profile 必须完整配置；`default` 是保留名称，不能出现在 `profiles` 中。
+
+## Assistant
+
+`assistant` 控制 Ask 的生成预算和上下文规模。`rewrite_max_output_tokens` 用于把追问改写为
+独立问题和检索词；`answer_max_output_tokens` 同时用于答案生成与引用修复。启用 reasoning 时，
+reasoning token 也会消耗这个输出预算。
+
+答案因长度截断且不符合 schema 时，Passagen 最多按
+`truncated_response_max_attempts` 重试，并逐次扩大输出预算。`max_history_messages` 限制送入
+rewrite 和 answer 上下文的最近消息数；设为 `0` 可禁用历史上下文。`max_raw_sections` 限制事实
+查询最多加载的原文章节数。
+
+三个 QA prompt path 为 `null` 时使用 Core 内置模板。相对路径与 pipeline prompt 一样，以
+配置文件所在目录为基准解析。
 
 ## GROBID 和 PDF Parser
 

@@ -23,6 +23,8 @@ from passagen.assistant.errors import (
 )
 from passagen.assistant.schemas import ContextSource, MessageStatus, QuestionIntent
 from passagen.assistant.service import ConversationService
+from passagen.config import AssistantSettings, LlmSettings
+from passagen.external.llm import LlmResponse
 from passagen.storage.database import connect_database
 
 
@@ -251,6 +253,46 @@ def test_answer_diagnostics_are_written_to_run_directory(tmp_path: Path) -> None
     for call_dir in call_dirs:
         assert (call_dir / "request.json").is_file()
         assert (call_dir / "response.json").is_file()
+
+
+def test_answer_retries_when_reasoning_consumes_the_output_budget(tmp_path: Path) -> None:
+    env = assistant_env(tmp_path)
+    responder = scripted_responder(env)
+
+    class ReasoningProvider:
+        provider_name = "fake"
+        model = "reasoning-model"
+
+        def __init__(self) -> None:
+            self.answer_attempts = 0
+            self.max_tokens: list[int] = []
+
+        def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
+            self.max_tokens.append(max_tokens)
+            if "You rewrite a question" not in prompt:
+                self.answer_attempts += 1
+                if self.answer_attempts == 1:
+                    return LlmResponse(
+                        content="",
+                        output_tokens=max_tokens,
+                        reasoning_tokens=max_tokens,
+                        finish_reason="length",
+                    )
+            return LlmResponse(content=str(responder(prompt)), finish_reason="stop")
+
+    provider = ReasoningProvider()
+    service = ConversationService(
+        env.database_path,
+        env.data_dir,
+        LlmSettings(),
+        AssistantSettings(answer_max_output_tokens=6_000),
+        provider=provider,
+    )
+
+    turn = service.ask(_create(service), "这篇论文解决什么问题？")
+
+    assert turn.answer_message.status is MessageStatus.COMPLETED
+    assert provider.max_tokens == [1024, 6000, 12000]
 
 
 def test_ask_requires_processed_paper(tmp_path: Path) -> None:

@@ -60,7 +60,7 @@ from passagen.assistant.schemas import (
 )
 from passagen.assistant.snapshots import build_paper_snapshot
 from passagen.assistant.versions import ANSWER_SCHEMA_VERSION, QA_PROMPT_VERSION
-from passagen.config import LlmPurpose, LlmSettings
+from passagen.config import AssistantSettings, LlmPurpose, LlmSettings
 from passagen.external.llm import LlmProvider, LlmProviderError, LlmResponse
 from passagen.parsing import ParsedPaper
 from passagen.prompting.templates import QaPromptTemplates, load_qa_prompt_templates
@@ -72,8 +72,6 @@ from passagen.storage.repository import get_artifact
 
 logger = logging.getLogger(__name__)
 
-_HISTORY_LIMIT = 10
-_MAX_RAW_SECTIONS = 3
 _REPAIR_ERROR_RESERVE_TOKENS = 512
 
 
@@ -85,17 +83,15 @@ class ConversationService:
         database_path: Path,
         data_dir: Path,
         settings: LlmSettings,
+        assistant_settings: AssistantSettings | None = None,
         *,
         provider: LlmProvider | None = None,
-        answer_max_output_tokens: int = 4096,
-        rewrite_max_output_tokens: int = 1024,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.data_dir = data_dir.expanduser().resolve()
         self.settings = settings
+        self.assistant_settings = assistant_settings or AssistantSettings()
         self.provider = provider
-        self.answer_max_output_tokens = answer_max_output_tokens
-        self.rewrite_max_output_tokens = rewrite_max_output_tokens
         _answer_profile_name, answer_profile = settings.resolve(LlmPurpose.QA_ANSWER)
         self.budget = TokenBudget.from_settings(answer_profile)
 
@@ -280,7 +276,11 @@ class ConversationService:
         answer_message: Message,
     ) -> QaRecord:
         paper = _require_paper_snapshot(snapshot)
-        prompts = load_qa_prompt_templates()
+        prompts = load_qa_prompt_templates(
+            self.assistant_settings.rewrite_prompt_path,
+            self.assistant_settings.answer_prompt_path,
+            self.assistant_settings.repair_prompt_path,
+        )
         history = self._recent_history(conversation.id, before_id=question_message.id)
         rewrite = self._rewrite(prompts, run_id, question_message.content, history)
         available = _available_sources(paper)
@@ -301,7 +301,8 @@ class ConversationService:
                 prompts.repair.content + _answer_schema() + plan.standalone_question
             ),
         )
-        overhead = base_prompt_tokens + self.answer_max_output_tokens + _REPAIR_ERROR_RESERVE_TOKENS
+        answer_max_tokens = self.assistant_settings.answer_max_output_tokens
+        overhead = base_prompt_tokens + answer_max_tokens + _REPAIR_ERROR_RESERVE_TOKENS
         sections = self._retrieve(paper, plan, evidence.parsed, overhead)
         context = build_context(
             snapshot=paper,
@@ -311,7 +312,7 @@ class ConversationService:
             outline=evidence.outline,
             sections=sections,
             budget=self.budget,
-            reserved_output_tokens=self.answer_max_output_tokens,
+            reserved_output_tokens=answer_max_tokens,
             prompt_overhead_tokens=overhead,
         )
         answer = self._generate_answer(prompts, run_id, plan, context, evidence)
@@ -353,7 +354,8 @@ class ConversationService:
             for message in messages[:before_index]
             if message.status is MessageStatus.COMPLETED
         ]
-        return history[-_HISTORY_LIMIT:]
+        limit = self.assistant_settings.max_history_messages
+        return history[-limit:] if limit else []
 
     def _rewrite(
         self,
@@ -370,7 +372,7 @@ class ConversationService:
             run_id,
             GenerationStage.REWRITE,
             prompt,
-            max_tokens=self.rewrite_max_output_tokens,
+            max_tokens=self.assistant_settings.rewrite_max_output_tokens,
         )
         try:
             result = RewriteResult.model_validate_json(response.content)
@@ -443,9 +445,11 @@ class ConversationService:
         )
         return retrieval.search(
             plan.retrieval_queries,
-            max_sections=_MAX_RAW_SECTIONS,
+            max_sections=self.assistant_settings.max_raw_sections,
             max_tokens=raw_section_token_cap(
-                self.budget, self.answer_max_output_tokens, prompt_overhead_tokens
+                self.budget,
+                self.assistant_settings.answer_max_output_tokens,
+                prompt_overhead_tokens,
             ),
         )
 
@@ -475,8 +479,9 @@ class ConversationService:
 
         response = retry_truncated_response(
             request,
-            initial_max_tokens=self.answer_max_output_tokens,
+            initial_max_tokens=self.assistant_settings.answer_max_output_tokens,
             is_valid=is_valid,
+            max_attempts=self.assistant_settings.truncated_response_max_attempts,
         )
         try:
             answer = self._canonicalize_answer(self._parse_answer(response.content), plan)
@@ -505,7 +510,10 @@ class ConversationService:
             candidate=candidate_content,
         )
         response = self._call_llm(
-            run_id, GenerationStage.REPAIR, prompt, max_tokens=self.answer_max_output_tokens
+            run_id,
+            GenerationStage.REPAIR,
+            prompt,
+            max_tokens=self.assistant_settings.answer_max_output_tokens,
         )
         repaired = self._canonicalize_answer(self._parse_answer(response.content), plan)
         try:

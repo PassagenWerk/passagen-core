@@ -148,7 +148,7 @@ def test_summarize_full_mode_saves_validated_json_yaml_and_call_audit(tmp_path: 
     full_call = json.loads((call_dir / "summary-full.json").read_text(encoding="utf-8"))
     assert "Complete serialized paper" in full_call["prompt"]
     assert "A test paper." in full_call["prompt"]
-    assert full_call["max_tokens"] == 3000
+    assert full_call["max_tokens"] == 20000
     assert stats.by_stage[LlmStage.EVIDENCE].calls == 0
     assert stats.by_stage[LlmStage.SUMMARY].calls == 1
     assert stats.total.total_tokens == 15
@@ -248,7 +248,7 @@ def test_summarize_hierarchical_extracts_evidence_per_chunk(tmp_path: Path) -> N
     call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
     evidence_call = json.loads((call_dir / "evidence-001.json").read_text(encoding="utf-8"))
     assert evidence_call["response"] == evidence
-    assert evidence_call["max_tokens"] == 1500
+    assert evidence_call["max_tokens"] == 6000
 
 
 def test_summarize_locally_removes_json_code_fence(tmp_path: Path) -> None:
@@ -341,7 +341,7 @@ def test_summarize_retries_truncated_evidence_with_more_output_tokens(tmp_path: 
     call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
     assert (call_dir / "evidence-001.json").is_file()
     retry_call = json.loads((call_dir / "evidence-001-retry-2.json").read_text(encoding="utf-8"))
-    assert retry_call["max_tokens"] == 3000
+    assert retry_call["max_tokens"] == 12000
 
 
 def test_summarize_fails_when_evidence_stays_truncated(tmp_path: Path) -> None:
@@ -370,7 +370,7 @@ def test_summarize_fails_when_evidence_stays_truncated(tmp_path: Path) -> None:
 
     call_dir = tmp_path / "logs" / "run" / "external" / "llm" / paper_id
     assert (call_dir / "evidence-001-retry-3.json").is_file()
-    assert json.loads((call_dir / "evidence-001-retry-3.json").read_text())["max_tokens"] == 6000
+    assert json.loads((call_dir / "evidence-001-retry-3.json").read_text())["max_tokens"] == 24000
 
 
 def test_summarize_reuses_successful_chunk_evidence_when_forced(tmp_path: Path) -> None:

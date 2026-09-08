@@ -4,6 +4,11 @@ All notable changes to Passagen Core are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Aligned the default context and generation budgets with the 1M-context
+  `deepseek-flash-v4` default model.
+
 ### Fixed
 
 - Answer generation now routes schema validation failures (for example a citation without a

@@ -109,7 +109,7 @@ def test_openai_flavor_uses_reasoning_effort(monkeypatch: pytest.MonkeyPatch) ->
     assert provider.generate("summarize", max_tokens=1000).content == "{}"
 
 
-def test_empty_response_reports_completion_details(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_empty_truncated_response_can_be_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
 
     response = httpx.Response(
@@ -125,8 +125,9 @@ def test_empty_response_reports_completion_details(monkeypatch: pytest.MonkeyPat
     client = httpx.Client(transport=httpx.MockTransport(lambda _request: response))
     provider = OpenAICompatibleProvider(LlmProfileSettings(), client=client)
 
-    with pytest.raises(
-        LlmProviderError,
-        match=r"finish_reason=length, output_tokens=1000, reasoning_tokens=1000",
-    ):
-        provider.generate("summarize", max_tokens=1000)
+    result = provider.generate("summarize", max_tokens=1000)
+
+    assert result.content == ""
+    assert result.finish_reason == "length"
+    assert result.output_tokens == 1000
+    assert result.reasoning_tokens == 1000

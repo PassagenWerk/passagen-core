@@ -87,7 +87,7 @@ class LlmProfileSettings(BaseModel):
     model: str = "deepseek-flash-v4"
     api_key_env: str = "PASSAGEN_API_KEY"
     timeout_seconds: float = Field(default=120.0, gt=0)
-    max_context_window: int = Field(default=128_000, ge=1_000)
+    max_context_window: int = Field(default=1_000_000, ge=1_000)
     flavor: LlmFlavor = LlmFlavor.DEEPSEEK
     reasoning: LlmReasoning = LlmReasoning.DISABLE
 
@@ -170,10 +170,10 @@ class SummarizationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: SummarizationStrategy = SummarizationStrategy.AUTO
-    chunk_max_input_tokens: int = Field(default=24_000, ge=1_000)
+    chunk_max_input_tokens: int = Field(default=128_000, ge=1_000)
     chunk_overlap_paragraphs: int = Field(default=1, ge=0, le=5)
-    fact_max_output_tokens: int = Field(default=1_500, ge=100)
-    summary_max_output_tokens: int = Field(default=3_000, ge=100)
+    fact_max_output_tokens: int = Field(default=6_000, ge=100)
+    summary_max_output_tokens: int = Field(default=20_000, ge=100)
     facts_prompt_path: Path | None = None
     summary_prompt_path: Path | None = None
     full_prompt_path: Path | None = None
@@ -184,7 +184,7 @@ class SummarizationSettings(BaseModel):
 class OutliningSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_output_tokens: int = Field(default=4_000, ge=100)
+    max_output_tokens: int = Field(default=40_000, ge=100)
     prompt_path: Path | None = None
 
 
@@ -198,6 +198,21 @@ class PipelineSettings(BaseModel):
     abstract_fixing: AbstractFixingSettings = Field(default_factory=AbstractFixingSettings)
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
     outlining: OutliningSettings = Field(default_factory=OutliningSettings)
+
+
+class AssistantSettings(BaseModel):
+    """Question-answering budgets, context limits, and prompt overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rewrite_max_output_tokens: int = Field(default=1_024, ge=100)
+    answer_max_output_tokens: int = Field(default=8_192, ge=100)
+    truncated_response_max_attempts: int = Field(default=3, ge=1, le=5)
+    max_history_messages: int = Field(default=10, ge=0, le=100)
+    max_raw_sections: int = Field(default=3, ge=1, le=20)
+    rewrite_prompt_path: Path | None = None
+    answer_prompt_path: Path | None = None
+    repair_prompt_path: Path | None = None
 
 
 class Settings(BaseSettings):
@@ -214,6 +229,7 @@ class Settings(BaseSettings):
     debug: bool = False
     providers: ProvidersSettings = Field(default_factory=ProvidersSettings)
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
 
     @property
     def resolved_data_dir(self) -> Path:
@@ -307,7 +323,7 @@ def _read_config(path: Path) -> dict[str, Any]:
     if "passagen" not in document:
         return document
 
-    unknown_sections = set(document) - {"passagen", "providers", "pipeline"}
+    unknown_sections = set(document) - {"passagen", "providers", "pipeline", "assistant"}
     if unknown_sections:
         names = ", ".join(sorted(str(name) for name in unknown_sections))
         raise ConfigError(f"Config {path} contains unknown sections: {names}")
@@ -320,14 +336,14 @@ def _read_config(path: Path) -> dict[str, Any]:
         values["providers"] = document["providers"]
     if "pipeline" in document:
         values["pipeline"] = document["pipeline"]
+    if "assistant" in document:
+        values["assistant"] = document["assistant"]
     return values
 
 
 def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
     """Resolve relative prompt paths against the config file directory."""
     pipeline = values.get("pipeline")
-    if not isinstance(pipeline, dict):
-        return
     prompt_keys = (
         ("abstract_fixing", ("prompt_path",)),
         (
@@ -342,14 +358,21 @@ def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
         ),
         ("outlining", ("prompt_path",)),
     )
-    for section, keys in prompt_keys:
-        section_values = pipeline.get(section)
-        if not isinstance(section_values, dict):
-            continue
-        for key in keys:
-            value = section_values.get(key)
+    if isinstance(pipeline, dict):
+        for section, keys in prompt_keys:
+            section_values = pipeline.get(section)
+            if not isinstance(section_values, dict):
+                continue
+            for key in keys:
+                value = section_values.get(key)
+                if isinstance(value, str) and value and not Path(value).is_absolute():
+                    section_values[key] = str(base_dir / value)
+    assistant = values.get("assistant")
+    if isinstance(assistant, dict):
+        for key in ("rewrite_prompt_path", "answer_prompt_path", "repair_prompt_path"):
+            value = assistant.get(key)
             if isinstance(value, str) and value and not Path(value).is_absolute():
-                section_values[key] = str(base_dir / value)
+                assistant[key] = str(base_dir / value)
 
 
 def _remove_environment_overrides(values: dict[str, Any]) -> None:

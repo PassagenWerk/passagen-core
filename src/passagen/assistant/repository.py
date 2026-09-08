@@ -349,6 +349,7 @@ def save_qa_turn(
                 source_fingerprint=record.source_fingerprint,
                 prompt_version=record.prompt_version,
                 answer_schema_version=record.answer_schema_version,
+                created_at=record.created_at,
             )
         )
         for citation in record.answer.citations:

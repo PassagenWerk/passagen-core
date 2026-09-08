@@ -84,21 +84,25 @@ class QaPromptTemplates:
     repair: PromptTemplate
 
 
-def load_qa_prompt_templates() -> QaPromptTemplates:
+def load_qa_prompt_templates(
+    rewrite_path: Path | None = None,
+    answer_path: Path | None = None,
+    repair_path: Path | None = None,
+) -> QaPromptTemplates:
     return QaPromptTemplates(
         rewrite=load_prompt_template(
             "qa-rewrite-v2.txt",
-            None,
+            rewrite_path,
             variables={"schema", "history", "question"},
         ),
         answer=load_prompt_template(
             "qa-answer-v3.txt",
-            None,
+            answer_path,
             variables={"schema", "question", "context"},
         ),
         repair=load_prompt_template(
             "qa-repair-v3.txt",
-            None,
+            repair_path,
             variables={"schema", "question", "context", "validation_error", "candidate"},
         ),
     )

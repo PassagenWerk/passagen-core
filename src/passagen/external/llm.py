@@ -72,7 +72,9 @@ class OpenAICompatibleProvider:
         output_tokens = _token_count(usage, "completion_tokens")
         reasoning_tokens = _reasoning_tokens(usage)
         finish_reason = _string(body["choices"][0].get("finish_reason"))
-        if not isinstance(content, str) or not content.strip():
+        if content is None and finish_reason == "length":
+            content = ""
+        if not isinstance(content, str) or (not content.strip() and finish_reason != "length"):
             raise LlmProviderError(
                 "OpenAI-compatible LLM returned an empty response "
                 f"(finish_reason={finish_reason}, output_tokens={output_tokens}, "

@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from passagen.config import CONFIG_FILENAME, ConfigError, LlmPurpose, LlmSettings, load_settings
+from passagen.config import (
+    CONFIG_FILENAME,
+    ConfigError,
+    LlmPurpose,
+    LlmSettings,
+    Settings,
+    load_settings,
+)
 
 
 def test_defaults_to_deepseek_flash() -> None:
@@ -10,7 +17,18 @@ def test_defaults_to_deepseek_flash() -> None:
 
     assert settings.default.base_url == "https://api.deepseek.com/v1"
     assert settings.default.model == "deepseek-flash-v4"
+    assert settings.default.max_context_window == 1_000_000
     assert settings.resolve(LlmPurpose.QA_ANSWER) == ("default", settings.default)
+
+
+def test_default_generation_budgets_match_default_llm() -> None:
+    settings = Settings()
+
+    assert settings.pipeline.summarization.chunk_max_input_tokens == 128_000
+    assert settings.pipeline.summarization.fact_max_output_tokens == 6_000
+    assert settings.pipeline.summarization.summary_max_output_tokens == 20_000
+    assert settings.pipeline.outlining.max_output_tokens == 40_000
+    assert settings.assistant.answer_max_output_tokens == 8_192
 
 
 def test_routes_selected_tasks_to_advanced_profiles() -> None:
@@ -122,7 +140,7 @@ pipeline:
     assert settings.providers.llm.default.model == "test-model"
     assert settings.pipeline.summarization.strategy.value == "hierarchical"
     assert settings.pipeline.summarization.chunk_max_input_tokens == 8000
-    assert settings.pipeline.outlining.max_output_tokens == 4000
+    assert settings.pipeline.outlining.max_output_tokens == 40000
 
 
 def test_data_dir_comes_from_command_line_only(
@@ -236,3 +254,25 @@ def test_resolves_relative_prompt_paths_against_config_directory(
     assert settings.pipeline.abstract_fixing.prompt_path == Path("data/prompts/abstract.txt")
     assert settings.pipeline.summarization.facts_prompt_path == Path("data/prompts/facts.txt")
     assert settings.pipeline.outlining.prompt_path == Path("/absolute/outline.txt")
+
+
+def test_loads_assistant_settings_and_resolves_prompt_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "assistant:\n"
+        "  rewrite_max_output_tokens: 1500\n"
+        "  answer_max_output_tokens: 12000\n"
+        "  truncated_response_max_attempts: 4\n"
+        "  max_history_messages: 6\n"
+        "  max_raw_sections: 5\n"
+        "  answer_prompt_path: prompts/answer.txt\n"
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.assistant.rewrite_max_output_tokens == 1500
+    assert settings.assistant.answer_max_output_tokens == 12000
+    assert settings.assistant.truncated_response_max_attempts == 4
+    assert settings.assistant.max_history_messages == 6
+    assert settings.assistant.max_raw_sections == 5
+    assert settings.assistant.answer_prompt_path == tmp_path / "prompts/answer.txt"
