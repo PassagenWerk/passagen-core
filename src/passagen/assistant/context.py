@@ -122,13 +122,13 @@ def build_collection_context(
     if ContextSource.RAW in plan.sources:
         raw_cap = int(available * _RAW_SHARE)
         for section in sections:
-            paper = papers.get(section.paper_id)
-            if paper is None or section.paper_id not in selected:
+            section_paper = papers.get(section.paper_id)
+            if section_paper is None or section.paper_id not in selected:
                 continue
             tokens = budget.estimate_tokens(section.text)
             if tokens > raw_cap:
                 continue
-            blocks.append(_raw_block(paper, section))
+            blocks.append(_raw_block(section_paper, section))
             raw_cap -= tokens
     if not blocks:
         raise ContextPlanError("the context plan produced no usable source blocks")

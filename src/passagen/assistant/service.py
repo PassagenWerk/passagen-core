@@ -453,6 +453,8 @@ class ConversationService:
         overhead = (
             self._prompt_overhead(prompts, plan) + answer_max_tokens + _REPAIR_ERROR_RESERVE_TOKENS
         )
+        context: AssembledContext
+        evidence: PaperEvidenceIndex | EvidenceIndex
         if snapshot.paper is not None:
             context, evidence = self._paper_context(
                 snapshot.paper, plan, history, previous_qa, overhead, answer_max_tokens
@@ -841,14 +843,14 @@ class ConversationService:
             by_id = {paper.paper_id: paper for paper in snapshot.collection.papers}
             papers: list[PaperEvidenceIndex] = []
             for paper_id in dict.fromkeys(citation.paper_id for citation in answer.citations):
-                paper = by_id.get(paper_id)
-                if paper is None:
+                snapshot_paper = by_id.get(paper_id)
+                if snapshot_paper is None:
                     raise ScopeError(
                         f"QA candidate cites paper {paper_id} outside the collection snapshot"
                     )
                 papers.append(
                     PaperEvidenceIndex(
-                        snapshot=paper,
+                        snapshot=snapshot_paper,
                         summary=(self._load_summary(paper_id) if "summary_json" in kinds else None),
                         outline=None,
                         parsed=self._load_parsed(paper_id) if "extracted_json" in kinds else None,

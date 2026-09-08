@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 from passagen.catalog import CatalogService
 from passagen.parsing import ParsedPaper, ParsedSection
@@ -18,7 +19,15 @@ from passagen.stages.summarization.schema import (
 )
 from passagen.storage.database import connect_database, initialize_database
 
-PAPER_TOPICS = {
+
+class PaperTopic(TypedDict):
+    title: str
+    sections: tuple[ParsedSection, ...]
+    metric: str
+    value: str
+
+
+PAPER_TOPICS: dict[str, PaperTopic] = {
     "paper-a": {
         "title": "Fast Scheduler",
         "sections": (
