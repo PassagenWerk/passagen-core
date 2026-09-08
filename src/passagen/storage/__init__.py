@@ -1,6 +1,7 @@
 from passagen.storage.engine import database_engine, session_scope
 from passagen.storage.models import (
     ArtifactRow,
+    CollectionArtifactRow,
     CollectionPaperRow,
     CollectionRow,
     LlmCallRow,
@@ -13,6 +14,7 @@ from passagen.storage.models import (
 
 __all__ = [
     "ArtifactRow",
+    "CollectionArtifactRow",
     "CollectionPaperRow",
     "CollectionRow",
     "LlmCallRow",

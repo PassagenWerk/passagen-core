@@ -27,6 +27,13 @@ All notable changes to Passagen Core are documented in this file.
 
 ### Added
 
+- Phase 4 Core collection synthesis: schema version 9 adds immutable collection artifact
+  indexing; ordered Summary fingerprints drive reuse, force-regeneration, and structured stale
+  detection. The public `CollectionSynthesisService` rejects missing summaries by default,
+  supports explicit partial coverage, uses bounded summary-only direct or map/reduce generation,
+  validates every cross-paper citation, accounts for every LLM call, and atomically publishes
+  deterministic JSON, Markdown, and source-manifest artifacts. CLI integration remains a
+  separate Phase 4 deliverable.
 - Phase 3 assistant foundation: schema version 8 materializes parsed paper sections into an
   FTS5 index, keeps the index transactionally aligned with parsed artifact metadata, and lazily
   indexes existing libraries. Exact same-scope questions with compatible source fingerprints

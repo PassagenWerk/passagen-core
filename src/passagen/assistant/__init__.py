@@ -47,6 +47,8 @@ from passagen.assistant.schemas import (
 from passagen.assistant.service import ConversationService
 from passagen.assistant.versions import (
     ANSWER_SCHEMA_VERSION,
+    COLLECTION_SYNTHESIS_PROMPT_VERSION,
+    COLLECTION_SYNTHESIS_SCHEMA_VERSION,
     CONTEXT_BUILDER_VERSION,
     CONTEXT_PLAN_VERSION,
     QA_PROMPT_VERSION,
@@ -56,6 +58,8 @@ from passagen.assistant.versions import (
 
 __all__ = [
     "ANSWER_SCHEMA_VERSION",
+    "COLLECTION_SYNTHESIS_PROMPT_VERSION",
+    "COLLECTION_SYNTHESIS_SCHEMA_VERSION",
     "CONTEXT_BUILDER_VERSION",
     "CONTEXT_PLAN_VERSION",
     "QA_PROMPT_VERSION",

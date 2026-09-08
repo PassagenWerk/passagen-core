@@ -77,6 +77,10 @@ class LlmPurpose(StrEnum):
     QA_EQUIVALENCE = "qa_equivalence"
     QA_ANSWER = "qa_answer"
     QA_REPAIR = "qa_repair"
+    COLLECTION_SYNTHESIS = "collection_synthesis"
+    COLLECTION_MAP = "collection_map"
+    COLLECTION_REDUCE = "collection_reduce"
+    COLLECTION_REPAIR = "collection_repair"
 
 
 class LlmProfileSettings(BaseModel):
@@ -214,6 +218,9 @@ class AssistantSettings(BaseModel):
     truncated_response_max_attempts: int = Field(default=3, ge=1, le=5)
     max_history_messages: int = Field(default=10, ge=0, le=100)
     max_raw_sections: int = Field(default=3, ge=1, le=20)
+    collection_max_input_tokens: int = Field(default=64_000, ge=1_000)
+    collection_map_max_output_tokens: int = Field(default=8_000, ge=100)
+    collection_synthesis_max_output_tokens: int = Field(default=12_000, ge=100)
     rewrite_prompt_path: Path | None = None
     equivalence_prompt_path: Path | None = None
     answer_prompt_path: Path | None = None

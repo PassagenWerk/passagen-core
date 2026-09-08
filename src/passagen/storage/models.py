@@ -411,3 +411,30 @@ class GenerationLlmCallRow(Base):
     )
 
     generation_run: Mapped[GenerationRunRow] = relationship(back_populates="llm_calls")
+
+
+class CollectionArtifactRow(Base):
+    __tablename__ = "collection_artifacts"
+    __table_args__ = (
+        CheckConstraint("kind IN ('synthesis_json', 'synthesis_markdown', 'synthesis_source')"),
+        UniqueConstraint("generation_run_id", "kind"),
+        Index("ix_collection_artifacts_collection_id", "collection_id"),
+        Index("ix_collection_artifacts_fingerprint", "collection_id", "source_fingerprint"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    generation_run_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("generation_runs.id", ondelete="SET NULL")
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )

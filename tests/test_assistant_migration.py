@@ -19,6 +19,7 @@ ASSISTANT_TABLES = {
     "generation_llm_calls",
     "paper_sections",
     "paper_sections_fts",
+    "collection_artifacts",
 }
 
 

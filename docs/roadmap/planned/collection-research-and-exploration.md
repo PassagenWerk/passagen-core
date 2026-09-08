@@ -2,7 +2,8 @@
 
 **状态：进行中（Phase 0 已完成：contract、评估问题集与 migration 0006；Phase 1 已完成：单篇问答
 Core 垂直切片；Phase 2 已完成：单篇 Web 体验与结构化归档；Phase 3 已完成：FTS5、重复问题
-检测、复用与部分覆盖、force regenerate 和 stale）**
+检测、复用与部分覆盖、force regenerate 和 stale；Phase 4 已完成：collection synthesis、
+comparison 与 CLI）**
 
 本文档定义针对单篇 paper 和一组 paper（collection）的持久化对话问答、结构化问答归档、
 collection 总结与对比，以及按问题选择 summary、outline、raw context 和历史问答的能力。
@@ -781,6 +782,10 @@ service，最后提交 CLI/Web adapter。跨仓库工作不能依赖尚未发布
 - 中英文问题可以通过 planner 生成的检索词定位英文 raw section。
 
 ### 15.6 Phase 4：Collection synthesis 与 comparison
+
+状态：已完成。Core 的 snapshot/fingerprint、schema version 9、结构化 synthesis、
+summary-only direct 与 bounded map/reduce、citation validation、partial coverage、stale/reuse/force、
+generation accounting 和确定性 artifact renderer，以及 CLI `collection synthesize/compare` 已交付。
 
 交付：
 
