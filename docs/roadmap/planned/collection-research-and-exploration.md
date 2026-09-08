@@ -3,8 +3,8 @@
 **状态：进行中（Phase 0 已完成：contract、评估问题集与 migration 0006；Phase 1 已完成：单篇问答
 Core 垂直切片；Phase 2 已完成：单篇 Web 体验与结构化归档；Phase 3 已完成：FTS5、重复问题
 检测、复用与部分覆盖、force regenerate 和 stale；Phase 4 已完成：collection synthesis、
-comparison 与 CLI；Phase 5 Core 已完成：collection conversation、两级检索、report 与通用
-queued dispatch，CLI/Web adapter 待交付）**
+comparison 与 CLI；Phase 5 已完成：collection conversation、两级检索、report、通用 queued
+ dispatch、CLI 与 Web workspace）**
 
 本文档定义针对单篇 paper 和一组 paper（collection）的持久化对话问答、结构化问答归档、
 collection 总结与对比，以及按问题选择 summary、outline、raw context 和历史问答的能力。
@@ -810,8 +810,8 @@ QA 复用与 stale）、两级 paper/section 检索（记录实际选择的 pape
 partial/stale、bounded repair、JSON/Markdown 与 citation 导航元数据），以及通用 queued
 generation run dispatch（answer/synthesis/report 一致 claim/execute，启动中断不留永久
 running 产品）已在 Core 交付并通过 fake provider 测试。CLI `collection ask/review/research`
-与 Web `Synthesis | Reports | Ask` workspace 仍为待交付 adapter，必须复用上述 Core service，
-不得另建 prompt、检索或 stale 逻辑。
+与 Web `Synthesis | Reports | Ask` workspace 也已交付，均复用上述 Core service，不另建
+prompt、检索或 stale 逻辑。
 
 交付：
 
