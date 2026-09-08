@@ -416,7 +416,12 @@ class GenerationLlmCallRow(Base):
 class CollectionArtifactRow(Base):
     __tablename__ = "collection_artifacts"
     __table_args__ = (
-        CheckConstraint("kind IN ('synthesis_json', 'synthesis_markdown', 'synthesis_source')"),
+        CheckConstraint(
+            "kind IN ("
+            "'synthesis_json', 'synthesis_markdown', 'synthesis_source', "
+            "'report_json', 'report_markdown', 'report_source', 'report_input'"
+            ")"
+        ),
         UniqueConstraint("generation_run_id", "kind"),
         Index("ix_collection_artifacts_collection_id", "collection_id"),
         Index("ix_collection_artifacts_fingerprint", "collection_id", "source_fingerprint"),
@@ -438,3 +443,35 @@ class CollectionArtifactRow(Base):
     created_at: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class CollectionReportRow(Base):
+    __tablename__ = "collection_reports"
+    __table_args__ = (
+        CheckConstraint("kind IN ('review', 'comparison', 'gaps', 'custom')"),
+        CheckConstraint("status IN ('queued', 'running', 'completed', 'failed')"),
+        Index("ix_collection_reports_collection_id", "collection_id"),
+        Index("ix_collection_reports_run_id", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    collection_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    user_prompt: Mapped[str | None] = mapped_column(Text)
+    source_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("generation_runs.id", ondelete="SET NULL")
+    )
+    report_artifact_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("collection_artifacts.id", ondelete="SET NULL")
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    completed_at: Mapped[str | None] = mapped_column(Text)

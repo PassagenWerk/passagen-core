@@ -1,5 +1,6 @@
 """Persistent paper/collection question answering and research contracts."""
 
+from passagen.assistant.citations import EvidenceIndex, PaperEvidenceIndex
 from passagen.assistant.errors import (
     AnswerValidationError,
     AssistantError,
@@ -52,6 +53,8 @@ from passagen.assistant.versions import (
     CONTEXT_BUILDER_VERSION,
     CONTEXT_PLAN_VERSION,
     QA_PROMPT_VERSION,
+    REPORT_PROMPT_VERSION,
+    REPORT_SCHEMA_VERSION,
     RETRIEVAL_VERSION,
     SNAPSHOT_SCHEMA_VERSION,
 )
@@ -63,6 +66,8 @@ __all__ = [
     "CONTEXT_BUILDER_VERSION",
     "CONTEXT_PLAN_VERSION",
     "QA_PROMPT_VERSION",
+    "REPORT_PROMPT_VERSION",
+    "REPORT_SCHEMA_VERSION",
     "RETRIEVAL_VERSION",
     "SNAPSHOT_SCHEMA_VERSION",
     "AnswerClaim",
@@ -83,6 +88,7 @@ __all__ = [
     "ConversationDetail",
     "ConversationScope",
     "ConversationService",
+    "EvidenceIndex",
     "GenerationRunKind",
     "GenerationRunStatus",
     "GenerationStage",
@@ -90,6 +96,7 @@ __all__ = [
     "Message",
     "MessageRole",
     "MessageStatus",
+    "PaperEvidenceIndex",
     "PaperSourceSnapshot",
     "ProviderCallError",
     "QaRecord",

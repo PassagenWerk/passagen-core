@@ -20,6 +20,7 @@ ASSISTANT_TABLES = {
     "paper_sections",
     "paper_sections_fts",
     "collection_artifacts",
+    "collection_reports",
 }
 
 
@@ -366,3 +367,94 @@ def test_migration_downgrade_and_reupgrade_round_trip(tmp_path: Path) -> None:
         assert _tables(connection) >= ASSISTANT_TABLES
         issues = connection.execute("PRAGMA foreign_key_check").fetchall()
     assert issues == []
+
+
+def test_upgrade_to_0010_preserves_artifacts_and_adds_reports(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    config = _alembic_config(database_path)
+    command.upgrade(config, "0009")
+    with connect_database(database_path) as connection:
+        connection.execute("INSERT INTO collections (id, name) VALUES ('collection-1', 'c')")
+        connection.execute(
+            "INSERT INTO generation_runs (id, kind, status, collection_id) "
+            "VALUES ('run-1', 'collection_synthesis', 'completed', 'collection-1')"
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_artifacts (
+                id, collection_id, generation_run_id, kind, path, version, sha256,
+                size_bytes, source_fingerprint
+            ) VALUES ('artifact-1', 'collection-1', 'run-1', 'synthesis_json',
+                      'collections/syntheses/run-1/synthesis.json', '1', ?, 10, ?)
+            """,
+            ("a" * 64, "b" * 64),
+        )
+
+    command.upgrade(config, "head")
+
+    with connect_database(database_path) as connection:
+        assert "collection_reports" in _tables(connection)
+        row = connection.execute(
+            "SELECT kind, path FROM collection_artifacts WHERE id = 'artifact-1'"
+        ).fetchone()
+        assert row is not None
+        assert row["kind"] == "synthesis_json"
+        connection.execute(
+            """
+            INSERT INTO collection_artifacts (
+                id, collection_id, generation_run_id, kind, path, version, sha256,
+                size_bytes, source_fingerprint
+            ) VALUES ('artifact-2', 'collection-1', 'run-1', 'report_json',
+                      'collections/reports/report-1/report.json', '1', ?, 10, ?)
+            """,
+            ("c" * 64, "d" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_reports (
+                id, collection_id, kind, status, title, source_snapshot_json,
+                source_fingerprint, run_id, report_artifact_id
+            ) VALUES ('report-1', 'collection-1', 'review', 'completed', 'Review',
+                      '{}', ?, 'run-1', 'artifact-2')
+            """,
+            ("e" * 64,),
+        )
+        issues = connection.execute("PRAGMA foreign_key_check").fetchall()
+    assert issues == []
+
+
+def test_collection_reports_constraints_are_checked(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    initialize_database(database_path)
+
+    with pytest.raises(sqlite3.IntegrityError), connect_database(database_path) as connection:
+        connection.execute("INSERT INTO collections (id, name) VALUES ('collection-1', 'c')")
+        connection.execute(
+            """
+            INSERT INTO collection_reports (
+                id, collection_id, kind, status, title, source_snapshot_json,
+                source_fingerprint
+            ) VALUES ('report-1', 'collection-1', 'essay', 'queued', 'Review', '{}', ?)
+            """,
+            ("e" * 64,),
+        )
+    with pytest.raises(sqlite3.IntegrityError), connect_database(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO collection_reports (
+                id, collection_id, kind, status, title, source_snapshot_json,
+                source_fingerprint
+            ) VALUES ('report-2', 'collection-1', 'review', 'running', 'Review', '{}', ?)
+            """,
+            ("f" * 64,),
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_artifacts (
+                id, collection_id, kind, path, version, sha256, size_bytes,
+                source_fingerprint
+            ) VALUES ('artifact-9', 'collection-1', 'report_pdf',
+                      'collections/reports/report-2/report.pdf', '1', ?, 10, ?)
+            """,
+            ("0" * 64, "1" * 64),
+        )

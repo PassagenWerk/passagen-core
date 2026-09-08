@@ -19,9 +19,14 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from passagen.assistant import repository
-from passagen.assistant.citations import PaperEvidenceIndex, validate_answer_citations
+from passagen.assistant.citations import (
+    EvidenceIndex,
+    PaperEvidenceIndex,
+    validate_answer_citations,
+)
 from passagen.assistant.context import (
     AssembledContext,
+    build_collection_context,
     build_context,
     raw_section_token_cap,
 )
@@ -45,13 +50,21 @@ from passagen.assistant.planner import (
     QaSemanticDecision,
     QaSemanticRelation,
     RewriteResult,
+    collection_deterministic_plan,
     deterministic_plan,
     normalize_question,
     question_hash,
 )
-from passagen.assistant.retrieval import FtsSectionRetrieval, RetrievedSection
+from passagen.assistant.retrieval import (
+    CollectionFtsSectionRetrieval,
+    FtsSectionRetrieval,
+    PaperCandidate,
+    RetrievedSection,
+    select_papers,
+)
 from passagen.assistant.schemas import (
     DEFAULT_CONVERSATION_TITLE,
+    CollectionSourceSnapshot,
     ContextPlan,
     ContextSource,
     Conversation,
@@ -70,7 +83,11 @@ from passagen.assistant.schemas import (
     TurnDisposition,
     source_fingerprint,
 )
-from passagen.assistant.snapshots import build_paper_snapshot
+from passagen.assistant.snapshots import (
+    build_collection_qa_snapshot,
+    build_paper_snapshot,
+    load_synthesis_text,
+)
 from passagen.assistant.versions import ANSWER_SCHEMA_VERSION, QA_PROMPT_VERSION
 from passagen.config import AssistantSettings, LlmPurpose, LlmSettings
 from passagen.external.llm import LlmProvider, LlmProviderError, LlmResponse
@@ -111,15 +128,32 @@ class ConversationService:
         _answer_profile_name, answer_profile = settings.resolve(LlmPurpose.QA_ANSWER)
         self.budget = TokenBudget.from_settings(answer_profile)
 
-    def create_conversation(self, paper_id: str, *, title: str | None = None) -> Conversation:
+    def create_conversation(
+        self,
+        paper_id: str | None = None,
+        *,
+        collection_id: str | None = None,
+        title: str | None = None,
+    ) -> Conversation:
+        if (paper_id is None) == (collection_id is None):
+            raise ScopeError("A conversation requires exactly one of paper_id or collection_id")
         return repository.create_conversation(
             self.database_path,
             paper_id=paper_id,
+            collection_id=collection_id,
             title=title or DEFAULT_CONVERSATION_TITLE,
         )
 
-    def list_conversations(self, paper_id: str) -> tuple[Conversation, ...]:
-        return repository.list_conversations(self.database_path, paper_id=paper_id)
+    def list_conversations(
+        self, paper_id: str | None = None, *, collection_id: str | None = None
+    ) -> tuple[Conversation, ...]:
+        if (paper_id is None) == (collection_id is None):
+            raise ScopeError(
+                "Listing conversations requires exactly one of paper_id or collection_id"
+            )
+        return repository.list_conversations(
+            self.database_path, paper_id=paper_id, collection_id=collection_id
+        )
 
     def get_conversation(self, conversation_id: str) -> ConversationDetail:
         conversation = repository.get_conversation(self.database_path, conversation_id)
@@ -152,16 +186,23 @@ class ConversationService:
         return QaRecordView(record, self.source_status(record))
 
     def source_status(self, record: QaRecord) -> SourceStatus:
-        if record.source_snapshot.paper is None:
+        if record.source_snapshot.paper is None and record.source_snapshot.collection is None:
             return SourceStatus(stale=True, reasons=["unsupported_scope"])
         try:
-            current = build_paper_snapshot(
-                self.database_path, record.source_snapshot.paper.paper_id
-            )
+            current = self._current_snapshot(record.source_snapshot)
         except ScopeError:
             return SourceStatus(stale=True, reasons=["source_missing"])
         reasons = _snapshot_changes(record.source_snapshot, current)
         return SourceStatus(stale=bool(reasons), reasons=reasons)
+
+    def _current_snapshot(self, snapshot: SourceSnapshot) -> SourceSnapshot:
+        if snapshot.paper is not None:
+            return build_paper_snapshot(self.database_path, snapshot.paper.paper_id)
+        if snapshot.collection is not None:
+            return build_collection_qa_snapshot(
+                self.database_path, self.data_dir, snapshot.collection.collection_id
+            )
+        raise ScopeError("the source snapshot has no paper or collection scope")
 
     def archive_qa_record(
         self, qa_record_id: str, *, title: str, tags: list[str] | None = None
@@ -194,10 +235,16 @@ class ConversationService:
         *,
         archived: bool | None = None,
         paper_id: str | None = None,
+        collection_id: str | None = None,
         limit: int = 50,
     ) -> tuple[QaRecord, ...]:
         return repository.search_qa_records(
-            self.database_path, query=query, archived=archived, paper_id=paper_id, limit=limit
+            self.database_path,
+            query=query,
+            archived=archived,
+            paper_id=paper_id,
+            collection_id=collection_id,
+            limit=limit,
         )
 
     def claim_next_queued_run(self) -> repository.GenerationRunRecord | None:
@@ -240,13 +287,26 @@ class ConversationService:
         conversation = repository.get_conversation(self.database_path, conversation_id)
         if conversation is None:
             raise AssistantNotFoundError(f"Conversation not found: {conversation_id}")
-        if conversation.scope is not ConversationScope.PAPER or conversation.paper_id is None:
-            raise ScopeError("Collection conversations are not supported yet")
-        snapshot = build_paper_snapshot(self.database_path, conversation.paper_id)
+        if conversation.scope is ConversationScope.PAPER and conversation.paper_id is not None:
+            snapshot = build_paper_snapshot(self.database_path, conversation.paper_id)
+            paper_id: str | None = conversation.paper_id
+            collection_id: str | None = None
+        elif (
+            conversation.scope is ConversationScope.COLLECTION
+            and conversation.collection_id is not None
+        ):
+            snapshot = build_collection_qa_snapshot(
+                self.database_path, self.data_dir, conversation.collection_id
+            )
+            paper_id = None
+            collection_id = conversation.collection_id
+        else:
+            raise ScopeError(f"Conversation {conversation_id} has an unsupported scope")
         run_id, question_message, answer_message = repository.create_turn_submission(
             self.database_path,
             kind=GenerationRunKind.ANSWER.value,
-            paper_id=conversation.paper_id,
+            paper_id=paper_id,
+            collection_id=collection_id,
             conversation_id=conversation_id,
             source_snapshot_json=snapshot.model_dump_json(),
             question=question.strip(),
@@ -320,11 +380,10 @@ class ConversationService:
         *,
         reuse_policy: ReusePolicy,
     ) -> tuple[QaRecord, TurnDisposition]:
-        paper = _require_paper_snapshot(snapshot)
-        current_snapshot = build_paper_snapshot(self.database_path, paper.paper_id)
+        current_snapshot = self._current_snapshot(snapshot)
         if source_fingerprint(current_snapshot) != source_fingerprint(snapshot):
             raise StaleSourceError(
-                f"Paper {paper.paper_id} sources changed after this run was submitted"
+                f"{snapshot.scope.value.capitalize()} sources changed after this run was submitted"
             )
         prompts = load_qa_prompt_templates(
             rewrite_path=self.assistant_settings.rewrite_prompt_path,
@@ -336,11 +395,12 @@ class ConversationService:
         rewrite = self._rewrite(prompts, run_id, question_message.content, history)
         normalized = normalize_question(rewrite.standalone_question)
         normalized_hash = question_hash(normalized)
+        semantic_candidate: QaRecord | None = None
+        semantic_relation: QaSemanticRelation | None = None
         if reuse_policy is ReusePolicy.AUTO:
             reused = self._reuse_exact(
                 conversation,
                 snapshot,
-                paper,
                 rewrite,
                 normalized,
                 normalized_hash,
@@ -350,13 +410,10 @@ class ConversationService:
             )
             if reused is not None:
                 return reused, TurnDisposition.EXACT_REUSE
-        semantic_candidate: QaRecord | None = None
-        semantic_relation: QaSemanticRelation | None = None
-        if reuse_policy is ReusePolicy.AUTO:
             semantic_candidate, semantic_relation = self._semantic_candidate(
                 prompts,
                 run_id,
-                paper,
+                snapshot,
                 rewrite.standalone_question,
                 normalized_hash,
             )
@@ -367,7 +424,6 @@ class ConversationService:
                 reused = self._reuse_record(
                     conversation,
                     snapshot,
-                    paper,
                     rewrite,
                     normalized,
                     normalized_hash,
@@ -377,15 +433,12 @@ class ConversationService:
                     semantic_candidate,
                 )
                 return reused, TurnDisposition.SEMANTIC_REUSE
-        available = _available_sources(paper)
-        plan = deterministic_plan(
-            standalone_question=rewrite.standalone_question,
-            retrieval_queries=rewrite.retrieval_queries,
-            requires_exact_quote=rewrite.requires_exact_quote,
-            has_history=bool(history),
-            paper_id=paper.paper_id,
-            available_sources=available,
-        )
+        if snapshot.paper is not None:
+            plan = self._paper_plan(snapshot.paper, rewrite, history)
+        elif snapshot.collection is not None:
+            plan = self._collection_plan(snapshot.collection, rewrite, history)
+        else:
+            raise ScopeError("the source snapshot has no paper or collection scope")
         if semantic_candidate is not None and semantic_relation is QaSemanticRelation.PARTIAL:
             plan = plan.model_copy(
                 update={
@@ -393,32 +446,22 @@ class ConversationService:
                     "sources": [*plan.sources, ContextSource.PREVIOUS_QA],
                 }
             )
-        evidence = self._load_evidence(paper, plan)
-        base_prompt_tokens = max(
-            self.budget.estimate_tokens(
-                prompts.answer.content + _answer_schema() + plan.standalone_question
-            ),
-            self.budget.estimate_tokens(
-                prompts.repair.content + _answer_schema() + plan.standalone_question
-            ),
+        previous_qa = (
+            semantic_candidate if semantic_relation is QaSemanticRelation.PARTIAL else None
         )
         answer_max_tokens = self.assistant_settings.answer_max_output_tokens
-        overhead = base_prompt_tokens + answer_max_tokens + _REPAIR_ERROR_RESERVE_TOKENS
-        sections = self._retrieve(paper, plan, evidence.parsed, overhead)
-        context = build_context(
-            snapshot=paper,
-            plan=plan,
-            history=history,
-            previous_qa=semantic_candidate
-            if semantic_relation is QaSemanticRelation.PARTIAL
-            else None,
-            summary=evidence.summary,
-            outline=evidence.outline,
-            sections=sections,
-            budget=self.budget,
-            reserved_output_tokens=answer_max_tokens,
-            prompt_overhead_tokens=overhead,
+        overhead = (
+            self._prompt_overhead(prompts, plan) + answer_max_tokens + _REPAIR_ERROR_RESERVE_TOKENS
         )
+        if snapshot.paper is not None:
+            context, evidence = self._paper_context(
+                snapshot.paper, plan, history, previous_qa, overhead, answer_max_tokens
+            )
+        else:
+            collection = _require_collection_snapshot(snapshot)
+            context, evidence = self._collection_context(
+                collection, plan, history, previous_qa, overhead, answer_max_tokens
+            )
         answer = self._generate_answer(prompts, run_id, plan, context, evidence)
         record = QaRecord(
             id=str(uuid.uuid4()),
@@ -446,11 +489,162 @@ class ConversationService:
         )
         return record, TurnDisposition.GENERATED
 
+    def _prompt_overhead(self, prompts: QaPromptTemplates, plan: ContextPlan) -> int:
+        return max(
+            self.budget.estimate_tokens(
+                prompts.answer.content + _answer_schema() + plan.standalone_question
+            ),
+            self.budget.estimate_tokens(
+                prompts.repair.content + _answer_schema() + plan.standalone_question
+            ),
+        )
+
+    def _paper_plan(
+        self,
+        paper: PaperSourceSnapshot,
+        rewrite: RewriteResult,
+        history: list[Message],
+    ) -> ContextPlan:
+        return deterministic_plan(
+            standalone_question=rewrite.standalone_question,
+            retrieval_queries=rewrite.retrieval_queries,
+            requires_exact_quote=rewrite.requires_exact_quote,
+            has_history=bool(history),
+            paper_id=paper.paper_id,
+            available_sources=_available_sources(paper),
+        )
+
+    def _collection_plan(
+        self,
+        collection: CollectionSourceSnapshot,
+        rewrite: RewriteResult,
+        history: list[Message],
+    ) -> ContextPlan:
+        return collection_deterministic_plan(
+            standalone_question=rewrite.standalone_question,
+            retrieval_queries=rewrite.retrieval_queries,
+            requires_exact_quote=rewrite.requires_exact_quote,
+            has_history=bool(history),
+            available_sources=_available_collection_sources(collection),
+        )
+
+    def _paper_context(
+        self,
+        paper: PaperSourceSnapshot,
+        plan: ContextPlan,
+        history: list[Message],
+        previous_qa: QaRecord | None,
+        prompt_overhead_tokens: int,
+        answer_max_tokens: int,
+    ) -> tuple[AssembledContext, PaperEvidenceIndex]:
+        evidence = self._load_evidence(paper, plan)
+        sections = self._retrieve(paper, plan, evidence.parsed, prompt_overhead_tokens)
+        context = build_context(
+            snapshot=paper,
+            plan=plan,
+            history=history,
+            previous_qa=previous_qa,
+            summary=evidence.summary,
+            outline=evidence.outline,
+            sections=sections,
+            budget=self.budget,
+            reserved_output_tokens=answer_max_tokens,
+            prompt_overhead_tokens=prompt_overhead_tokens,
+        )
+        return context, evidence
+
+    def _collection_context(
+        self,
+        collection: CollectionSourceSnapshot,
+        plan: ContextPlan,
+        history: list[Message],
+        previous_qa: QaRecord | None,
+        prompt_overhead_tokens: int,
+        answer_max_tokens: int,
+    ) -> tuple[AssembledContext, EvidenceIndex]:
+        summaries: dict[str, StructuredSummary] = {}
+        for paper in collection.papers:
+            if any(artifact.kind == "summary_json" for artifact in paper.artifacts):
+                summaries[paper.paper_id] = self._load_summary(paper.paper_id)
+        synthesis_text = (
+            load_synthesis_text(self.database_path, self.data_dir, collection.synthesis)
+            if collection.synthesis is not None
+            else None
+        )
+        candidates = [
+            PaperCandidate(
+                paper_id=paper.paper_id,
+                title=paper.title,
+                text=_paper_scoring_text(paper, summaries.get(paper.paper_id), synthesis_text),
+            )
+            for paper in collection.papers
+        ]
+        selected = select_papers(
+            candidates,
+            plan.retrieval_queries or [plan.standalone_question],
+            max_papers=self.assistant_settings.collection_max_selected_papers,
+        )
+        plan.paper_ids = selected
+        parsed: dict[str, ParsedPaper] = {}
+        sections: list[RetrievedSection] = []
+        if ContextSource.RAW in plan.sources:
+            paper_shas: dict[str, str] = {}
+            for paper in collection.papers:
+                if paper.paper_id not in selected:
+                    continue
+                artifact = next(
+                    (item for item in paper.artifacts if item.kind == "extracted_json"), None
+                )
+                if artifact is None:
+                    continue
+                parsed_paper = self._load_parsed(paper.paper_id)
+                parsed[paper.paper_id] = parsed_paper
+                self._ensure_sections_index(paper.paper_id, artifact.sha256, parsed_paper)
+                paper_shas[paper.paper_id] = artifact.sha256
+            retrieval = CollectionFtsSectionRetrieval(
+                self.database_path,
+                paper_shas,
+                chars_per_token=self.budget.chars_per_token,
+            )
+            sections = retrieval.search(
+                plan.retrieval_queries,
+                max_sections=self.assistant_settings.max_raw_sections,
+                max_tokens=raw_section_token_cap(
+                    self.budget,
+                    answer_max_tokens,
+                    prompt_overhead_tokens,
+                ),
+            )
+        context = build_collection_context(
+            snapshot=collection,
+            plan=plan,
+            history=history,
+            previous_qa=previous_qa,
+            synthesis_text=synthesis_text,
+            summaries=summaries,
+            sections=sections,
+            budget=self.budget,
+            reserved_output_tokens=answer_max_tokens,
+            prompt_overhead_tokens=prompt_overhead_tokens,
+        )
+        by_id = {paper.paper_id: paper for paper in collection.papers}
+        evidence = EvidenceIndex(
+            papers=tuple(
+                PaperEvidenceIndex(
+                    snapshot=by_id[paper_id],
+                    summary=summaries.get(paper_id),
+                    outline=None,
+                    parsed=parsed.get(paper_id),
+                )
+                for paper_id in selected
+            )
+        )
+        return context, evidence
+
     def _reuse_exact(
         self,
         conversation: Conversation,
         snapshot: SourceSnapshot,
-        paper: PaperSourceSnapshot,
         rewrite: RewriteResult,
         normalized: str,
         normalized_hash: str,
@@ -460,7 +654,10 @@ class ConversationService:
     ) -> QaRecord | None:
         candidates = repository.find_exact_qa_records(
             self.database_path,
-            paper_id=paper.paper_id,
+            paper_id=snapshot.paper.paper_id if snapshot.paper is not None else None,
+            collection_id=(
+                snapshot.collection.collection_id if snapshot.collection is not None else None
+            ),
             normalized_question=normalized,
             normalized_question_hash=normalized_hash,
         )
@@ -469,7 +666,7 @@ class ConversationService:
             (
                 item
                 for item in candidates
-                if self._candidate_is_compatible(item, paper, fingerprint)
+                if self._candidate_is_compatible(item, snapshot, fingerprint)
             ),
             None,
         )
@@ -478,7 +675,6 @@ class ConversationService:
         return self._reuse_record(
             conversation,
             snapshot,
-            paper,
             rewrite,
             normalized,
             normalized_hash,
@@ -492,7 +688,6 @@ class ConversationService:
         self,
         conversation: Conversation,
         snapshot: SourceSnapshot,
-        paper: PaperSourceSnapshot,
         rewrite: RewriteResult,
         normalized: str,
         normalized_hash: str,
@@ -507,7 +702,7 @@ class ConversationService:
             intent=candidate.intent,
             reuse_qa_id=candidate.id,
             sources=[ContextSource.PREVIOUS_QA],
-            paper_ids=[paper.paper_id],
+            paper_ids=list(snapshot.paper_ids()),
             answer_kind=candidate.context_plan.answer_kind,
         )
         answer = candidate.answer.model_copy(
@@ -546,21 +741,24 @@ class ConversationService:
         self,
         prompts: QaPromptTemplates,
         run_id: str,
-        paper: PaperSourceSnapshot,
+        snapshot: SourceSnapshot,
         question: str,
         normalized_hash: str,
     ) -> tuple[QaRecord | None, QaSemanticRelation | None]:
-        fingerprint = source_fingerprint(build_paper_snapshot(self.database_path, paper.paper_id))
+        fingerprint = source_fingerprint(self._current_snapshot(snapshot))
         pool = repository.find_qa_candidates(
             self.database_path,
-            paper_id=paper.paper_id,
+            paper_id=snapshot.paper.paper_id if snapshot.paper is not None else None,
+            collection_id=(
+                snapshot.collection.collection_id if snapshot.collection is not None else None
+            ),
             exclude_normalized_question_hash=normalized_hash,
             pool_size=self.assistant_settings.qa_candidate_pool_size,
         )
         compatible = [
             candidate
             for candidate in pool
-            if self._candidate_is_compatible(candidate, paper, fingerprint)
+            if self._candidate_is_compatible(candidate, snapshot, fingerprint)
         ]
         candidates = _rank_qa_candidates(question, compatible)[
             : self.assistant_settings.max_qa_candidates
@@ -612,7 +810,7 @@ class ConversationService:
         return None, None
 
     def _candidate_is_compatible(
-        self, candidate: QaRecord, paper: PaperSourceSnapshot, fingerprint: str
+        self, candidate: QaRecord, snapshot: SourceSnapshot, fingerprint: str
     ) -> bool:
         if (
             candidate.source_fingerprint != fingerprint
@@ -621,22 +819,43 @@ class ConversationService:
         ):
             return False
         try:
-            evidence = self._evidence_for_answer(paper, candidate.answer)
+            evidence = self._evidence_for_answer(snapshot, candidate.answer)
             validate_answer_citations(candidate.answer, evidence)
         except (AssistantError, OSError, ValidationError):
             return False
         return True
 
     def _evidence_for_answer(
-        self, paper: PaperSourceSnapshot, answer: StructuredAnswer
-    ) -> PaperEvidenceIndex:
+        self, snapshot: SourceSnapshot, answer: StructuredAnswer
+    ) -> PaperEvidenceIndex | EvidenceIndex:
         kinds = {citation.artifact_kind.value for citation in answer.citations}
-        return PaperEvidenceIndex(
-            snapshot=paper,
-            summary=self._load_summary(paper.paper_id) if "summary_json" in kinds else None,
-            outline=self._load_outline(paper.paper_id) if "outline_md" in kinds else None,
-            parsed=self._load_parsed(paper.paper_id) if "extracted_json" in kinds else None,
-        )
+        if snapshot.paper is not None:
+            paper = snapshot.paper
+            return PaperEvidenceIndex(
+                snapshot=paper,
+                summary=self._load_summary(paper.paper_id) if "summary_json" in kinds else None,
+                outline=self._load_outline(paper.paper_id) if "outline_md" in kinds else None,
+                parsed=self._load_parsed(paper.paper_id) if "extracted_json" in kinds else None,
+            )
+        if snapshot.collection is not None:
+            by_id = {paper.paper_id: paper for paper in snapshot.collection.papers}
+            papers: list[PaperEvidenceIndex] = []
+            for paper_id in dict.fromkeys(citation.paper_id for citation in answer.citations):
+                paper = by_id.get(paper_id)
+                if paper is None:
+                    raise ScopeError(
+                        f"QA candidate cites paper {paper_id} outside the collection snapshot"
+                    )
+                papers.append(
+                    PaperEvidenceIndex(
+                        snapshot=paper,
+                        summary=(self._load_summary(paper_id) if "summary_json" in kinds else None),
+                        outline=None,
+                        parsed=self._load_parsed(paper_id) if "extracted_json" in kinds else None,
+                    )
+                )
+            return EvidenceIndex(papers=tuple(papers))
+        raise ScopeError("the source snapshot has no paper or collection scope")
 
     def _recent_history(self, conversation_id: str, *, before_id: str) -> list[Message]:
         messages = repository.list_messages(self.database_path, conversation_id)
@@ -732,13 +951,7 @@ class ConversationService:
         if parsed is None:
             raise ContextPlanError("the plan requires raw sections but they were not loaded")
         artifact = next(a for a in paper.artifacts if a.kind == "extracted_json")
-        if paper_sections_artifact_sha(self.database_path, paper.paper_id) != artifact.sha256:
-            current = get_artifact(self.database_path, paper.paper_id, "extracted_json")
-            if current is None or current.sha256 != artifact.sha256:
-                raise StaleSourceError(
-                    f"Paper {paper.paper_id} extracted text changed after this run was submitted"
-                )
-            replace_paper_sections(self.database_path, paper.paper_id, current, parsed.sections)
+        self._ensure_sections_index(paper.paper_id, artifact.sha256, parsed)
         retrieval = FtsSectionRetrieval(
             self.database_path,
             paper.paper_id,
@@ -755,13 +968,27 @@ class ConversationService:
             ),
         )
 
+    def _ensure_sections_index(
+        self, paper_id: str, artifact_sha256: str, parsed: ParsedPaper
+    ) -> None:
+        """Materialize the FTS section index for one snapshot-pinned artifact."""
+
+        if paper_sections_artifact_sha(self.database_path, paper_id) == artifact_sha256:
+            return
+        current = get_artifact(self.database_path, paper_id, "extracted_json")
+        if current is None or current.sha256 != artifact_sha256:
+            raise StaleSourceError(
+                f"Paper {paper_id} extracted text changed after this run was submitted"
+            )
+        replace_paper_sections(self.database_path, paper_id, current, parsed.sections)
+
     def _generate_answer(
         self,
         prompts: QaPromptTemplates,
         run_id: str,
         plan: ContextPlan,
         context: AssembledContext,
-        evidence: PaperEvidenceIndex,
+        evidence: PaperEvidenceIndex | EvidenceIndex,
     ) -> StructuredAnswer:
         prompt = prompts.answer.render(
             schema=_answer_schema(),
@@ -802,7 +1029,7 @@ class ConversationService:
         validation_error: str,
         plan: ContextPlan,
         context: AssembledContext,
-        evidence: PaperEvidenceIndex,
+        evidence: PaperEvidenceIndex | EvidenceIndex,
     ) -> StructuredAnswer:
         prompt = prompts.repair.render(
             schema=_answer_schema(),
@@ -933,6 +1160,12 @@ def _require_paper_snapshot(snapshot: SourceSnapshot) -> PaperSourceSnapshot:
     return snapshot.paper
 
 
+def _require_collection_snapshot(snapshot: SourceSnapshot) -> CollectionSourceSnapshot:
+    if snapshot.collection is None:
+        raise ScopeError("the source snapshot is not collection-scoped")
+    return snapshot.collection
+
+
 def _available_sources(paper: PaperSourceSnapshot) -> set[ContextSource]:
     sources = {ContextSource.CONVERSATION, ContextSource.PREVIOUS_QA}
     kinds = {artifact.kind for artifact in paper.artifacts}
@@ -943,6 +1176,33 @@ def _available_sources(paper: PaperSourceSnapshot) -> set[ContextSource]:
     if "extracted_json" in kinds:
         sources.add(ContextSource.RAW)
     return sources
+
+
+def _available_collection_sources(collection: CollectionSourceSnapshot) -> set[ContextSource]:
+    sources = {ContextSource.CONVERSATION, ContextSource.PREVIOUS_QA}
+    if collection.synthesis is not None:
+        sources.add(ContextSource.COLLECTION_SUMMARY)
+    kinds = {artifact.kind for paper in collection.papers for artifact in paper.artifacts}
+    if "summary_json" in kinds:
+        sources.add(ContextSource.PAPER_SUMMARIES)
+    if "extracted_json" in kinds:
+        sources.add(ContextSource.RAW)
+    return sources
+
+
+def _paper_scoring_text(
+    paper: PaperSourceSnapshot,
+    summary: StructuredSummary | None,
+    synthesis_text: str | None,
+) -> str:
+    """Compact per-paper document for lexical selection (bounded for CPU)."""
+
+    parts = [paper.title or ""]
+    if summary is not None:
+        parts.append(summary.model_dump_json()[:20_000])
+    elif synthesis_text is not None:
+        parts.append(synthesis_text[:20_000])
+    return " ".join(part for part in parts if part)
 
 
 def _rewrite_schema() -> str:
@@ -974,24 +1234,15 @@ def _conversation_title(candidate: str | None, conversation: Conversation) -> st
 def _snapshot_changes(previous: SourceSnapshot, current: SourceSnapshot) -> list[str]:
     if source_fingerprint(previous) == source_fingerprint(current):
         return []
-    if previous.paper is None or current.paper is None:
+    if previous.scope != current.scope:
         return ["scope_changed"]
     reasons: list[str] = []
-    if previous.paper.status != current.paper.status:
-        reasons.append("paper_status_changed")
-    previous_artifacts = {artifact.kind: artifact for artifact in previous.paper.artifacts}
-    current_artifacts = {artifact.kind: artifact for artifact in current.paper.artifacts}
-    for kind in sorted(previous_artifacts.keys() | current_artifacts.keys()):
-        old = previous_artifacts.get(kind)
-        new = current_artifacts.get(kind)
-        if old is None or new is None:
-            reasons.append(f"{kind}_availability_changed")
-        elif old.sha256 != new.sha256:
-            reasons.append(f"{kind}_content_changed")
-        elif old.schema_version != new.schema_version:
-            reasons.append(f"{kind}_schema_changed")
-        elif old.artifact_id != new.artifact_id:
-            reasons.append(f"{kind}_artifact_changed")
+    if previous.paper is not None and current.paper is not None:
+        reasons.extend(_paper_snapshot_changes(previous.paper, current.paper, prefix=""))
+    elif previous.collection is not None and current.collection is not None:
+        reasons.extend(_collection_snapshot_changes(previous.collection, current.collection))
+    else:
+        return ["scope_changed"]
     for field in (
         "context_builder_version",
         "retrieval_version",
@@ -1001,3 +1252,55 @@ def _snapshot_changes(previous: SourceSnapshot, current: SourceSnapshot) -> list
         if getattr(previous, field) != getattr(current, field):
             reasons.append(f"{field}_changed")
     return reasons or ["source_fingerprint_changed"]
+
+
+def _paper_snapshot_changes(
+    previous: PaperSourceSnapshot, current: PaperSourceSnapshot, *, prefix: str
+) -> list[str]:
+    reasons: list[str] = []
+    if previous.status != current.status:
+        reasons.append(f"{prefix}paper_status_changed")
+    previous_artifacts = {artifact.kind: artifact for artifact in previous.artifacts}
+    current_artifacts = {artifact.kind: artifact for artifact in current.artifacts}
+    for kind in sorted(previous_artifacts.keys() | current_artifacts.keys()):
+        old = previous_artifacts.get(kind)
+        new = current_artifacts.get(kind)
+        if old is None or new is None:
+            reasons.append(f"{prefix}{kind}_availability_changed")
+        elif old.sha256 != new.sha256:
+            reasons.append(f"{prefix}{kind}_content_changed")
+        elif old.schema_version != new.schema_version:
+            reasons.append(f"{prefix}{kind}_schema_changed")
+        elif old.artifact_id != new.artifact_id:
+            reasons.append(f"{prefix}{kind}_artifact_changed")
+    return reasons
+
+
+def _collection_snapshot_changes(
+    previous: CollectionSourceSnapshot, current: CollectionSourceSnapshot
+) -> list[str]:
+    reasons: list[str] = []
+    old_ids = [paper.paper_id for paper in previous.papers]
+    new_ids = [paper.paper_id for paper in current.papers]
+    if set(old_ids) != set(new_ids):
+        reasons.append("collection_members_changed")
+    elif old_ids != new_ids:
+        reasons.append("collection_order_changed")
+    if previous.name != current.name or previous.description != current.description:
+        reasons.append("collection_metadata_changed")
+    current_by_id = {paper.paper_id: paper for paper in current.papers}
+    for paper in previous.papers:
+        current_paper = current_by_id.get(paper.paper_id)
+        if current_paper is None:
+            continue
+        reasons.extend(_paper_snapshot_changes(paper, current_paper, prefix=f"{paper.paper_id}:"))
+    old_synthesis = previous.synthesis
+    new_synthesis = current.synthesis
+    if (old_synthesis is None) != (new_synthesis is None):
+        reasons.append("synthesis_availability_changed")
+    elif old_synthesis is not None and new_synthesis is not None:
+        if old_synthesis.sha256 != new_synthesis.sha256:
+            reasons.append("synthesis_content_changed")
+        elif old_synthesis.artifact_id != new_synthesis.artifact_id:
+            reasons.append("synthesis_artifact_changed")
+    return reasons

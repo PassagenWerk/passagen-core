@@ -27,6 +27,7 @@ from passagen.assistant.schemas import (
 )
 from passagen.storage.engine import session_scope
 from passagen.storage.models import (
+    CollectionRow,
     ConversationMessageRow,
     ConversationRow,
     GenerationLlmCallRow,
@@ -76,13 +77,27 @@ class GenerationLlmCallRecord:
     created_at: str
 
 
-def create_conversation(database_path: Path, *, paper_id: str, title: str) -> Conversation:
+def create_conversation(
+    database_path: Path,
+    *,
+    paper_id: str | None = None,
+    collection_id: str | None = None,
+    title: str,
+) -> Conversation:
+    if (paper_id is None) == (collection_id is None):
+        raise ConversationNotFoundError(
+            "A conversation requires exactly one of paper_id or collection_id"
+        )
     conversation_id = str(uuid.uuid4())
     with session_scope(database_path) as session:
-        if session.get(PaperRow, paper_id) is None:
+        if paper_id is not None and session.get(PaperRow, paper_id) is None:
             raise ConversationNotFoundError(f"Paper not found: {paper_id}")
+        if collection_id is not None and session.get(CollectionRow, collection_id) is None:
+            raise ConversationNotFoundError(f"Collection not found: {collection_id}")
         session.add(
-            ConversationRow(id=conversation_id, paper_id=paper_id, collection_id=None, title=title)
+            ConversationRow(
+                id=conversation_id, paper_id=paper_id, collection_id=collection_id, title=title
+            )
         )
         session.flush()
         row = session.get(ConversationRow, conversation_id)
@@ -91,12 +106,24 @@ def create_conversation(database_path: Path, *, paper_id: str, title: str) -> Co
         return _conversation(row)
 
 
-def list_conversations(database_path: Path, *, paper_id: str) -> tuple[Conversation, ...]:
+def list_conversations(
+    database_path: Path,
+    *,
+    paper_id: str | None = None,
+    collection_id: str | None = None,
+) -> tuple[Conversation, ...]:
     with session_scope(database_path) as session:
+        statement = select(ConversationRow)
+        if paper_id is not None:
+            statement = statement.where(ConversationRow.paper_id == paper_id)
+        elif collection_id is not None:
+            statement = statement.where(ConversationRow.collection_id == collection_id)
+        else:
+            raise ConversationNotFoundError(
+                "Listing conversations requires paper_id or collection_id"
+            )
         rows = session.scalars(
-            select(ConversationRow)
-            .where(ConversationRow.paper_id == paper_id)
-            .order_by(ConversationRow.updated_at.desc(), ConversationRow.id)
+            statement.order_by(ConversationRow.updated_at.desc(), ConversationRow.id)
         ).all()
         return tuple(_conversation(row) for row in rows)
 
@@ -198,7 +225,8 @@ def create_turn_submission(
     database_path: Path,
     *,
     kind: str,
-    paper_id: str,
+    paper_id: str | None = None,
+    collection_id: str | None = None,
     conversation_id: str,
     source_snapshot_json: str,
     question: str,
@@ -215,6 +243,7 @@ def create_turn_submission(
                 id=run_id,
                 kind=kind,
                 paper_id=paper_id,
+                collection_id=collection_id,
                 conversation_id=conversation_id,
                 status="queued",
                 reuse_policy=reuse_policy.value,
@@ -437,7 +466,8 @@ def get_qa_record_by_answer_message(database_path: Path, answer_message_id: str)
 def find_exact_qa_records(
     database_path: Path,
     *,
-    paper_id: str,
+    paper_id: str | None = None,
+    collection_id: str | None = None,
     normalized_question: str,
     normalized_question_hash: str,
     limit: int = 5,
@@ -447,7 +477,7 @@ def find_exact_qa_records(
             select(QaRecordRow)
             .join(ConversationRow, ConversationRow.id == QaRecordRow.conversation_id)
             .where(
-                ConversationRow.paper_id == paper_id,
+                _conversation_scope_filter(paper_id, collection_id),
                 QaRecordRow.normalized_question_hash == normalized_question_hash,
                 QaRecordRow.normalized_question == normalized_question,
             )
@@ -460,24 +490,33 @@ def find_exact_qa_records(
 def find_qa_candidates(
     database_path: Path,
     *,
-    paper_id: str,
+    paper_id: str | None = None,
+    collection_id: str | None = None,
     exclude_normalized_question_hash: str,
     pool_size: int,
 ) -> tuple[QaRecord, ...]:
-    """Return a bounded, recent same-paper pool for in-memory lexical ranking."""
+    """Return a bounded, recent same-scope pool for in-memory lexical ranking."""
 
     with session_scope(database_path) as session:
         rows = session.scalars(
             select(QaRecordRow)
             .join(ConversationRow, ConversationRow.id == QaRecordRow.conversation_id)
             .where(
-                ConversationRow.paper_id == paper_id,
+                _conversation_scope_filter(paper_id, collection_id),
                 QaRecordRow.normalized_question_hash != exclude_normalized_question_hash,
             )
             .order_by(QaRecordRow.created_at.desc(), QaRecordRow.id)
             .limit(pool_size)
         ).all()
         return tuple(_qa_record(row) for row in rows)
+
+
+def _conversation_scope_filter(paper_id: str | None, collection_id: str | None):
+    if paper_id is not None:
+        return ConversationRow.paper_id == paper_id
+    if collection_id is not None:
+        return ConversationRow.collection_id == collection_id
+    raise ConversationNotFoundError("A scope filter requires paper_id or collection_id")
 
 
 def list_qa_records(database_path: Path, conversation_id: str) -> tuple[QaRecord, ...]:
@@ -519,14 +558,15 @@ def search_qa_records(
     query: str | None = None,
     archived: bool | None = None,
     paper_id: str | None = None,
+    collection_id: str | None = None,
     limit: int = 50,
 ) -> tuple[QaRecord, ...]:
     with session_scope(database_path) as session:
         statement = select(QaRecordRow)
-        if paper_id is not None:
+        if paper_id is not None or collection_id is not None:
             statement = statement.join(
                 ConversationRow, ConversationRow.id == QaRecordRow.conversation_id
-            ).where(ConversationRow.paper_id == paper_id)
+            ).where(_conversation_scope_filter(paper_id, collection_id))
         if archived is not None:
             statement = statement.where(
                 QaRecordRow.archived_at.is_not(None)

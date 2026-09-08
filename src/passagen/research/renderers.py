@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from passagen.research.schemas import CollectionSynthesis
+from passagen.research.schemas import CollectionReport, CollectionSynthesis
 
 
 def render_synthesis_json(synthesis: CollectionSynthesis) -> bytes:
@@ -60,4 +60,54 @@ def render_synthesis_markdown(synthesis: CollectionSynthesis) -> str:
     for citation in synthesis.citations:
         locator = citation.summary_path or citation.section or str(citation.page_start or "")
         lines.append(f"- [{citation.citation_id}] {citation.paper_id}: {locator}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_report_json(report: CollectionReport) -> bytes:
+    return (
+        json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def render_report_markdown(report: CollectionReport) -> str:
+    lines = [f"# {report.title}", ""]
+    lines.append(f"Kind: {report.kind.value}")
+    if report.user_prompt:
+        lines.append(f"Research question: {report.user_prompt}")
+    if report.synthesis_artifact_id:
+        lines.append(f"Reused collection synthesis: {report.synthesis_artifact_id}")
+    lines.append("")
+    for section in report.sections:
+        lines.append(f"## {section.heading}")
+        lines.append("")
+        lines.append(section.body_markdown)
+        lines.append("")
+        for claim in section.claims:
+            references = " ".join(f"[{item}]" for item in claim.citation_ids)
+            lines.append(f"- {claim.text} {references}".rstrip())
+        if section.claims:
+            lines.append("")
+    if report.claims:
+        lines.extend(["## Key Claims", ""])
+        for claim in report.claims:
+            references = " ".join(f"[{item}]" for item in claim.citation_ids)
+            lines.append(f"- {claim.text} {references}".rstrip())
+        lines.append("")
+    lines.extend(["## Coverage", ""])
+    lines.append("Included papers: " + ", ".join(report.coverage.included_paper_ids))
+    if report.coverage.missing_summary_paper_ids:
+        lines.append("Missing summaries: " + ", ".join(report.coverage.missing_summary_paper_ids))
+    lines.extend(["", "## Citations", ""])
+    for citation in report.citations:
+        locator = citation.summary_path or citation.section or str(citation.page_start or "")
+        lines.append(
+            f"- [{citation.citation_id}] {citation.paper_id} "
+            f"({citation.artifact_kind.value} {citation.artifact_id or ''}): {locator}".rstrip()
+        )
     return "\n".join(lines).rstrip() + "\n"

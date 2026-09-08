@@ -81,6 +81,8 @@ class LlmPurpose(StrEnum):
     COLLECTION_MAP = "collection_map"
     COLLECTION_REDUCE = "collection_reduce"
     COLLECTION_REPAIR = "collection_repair"
+    REPORT_ANSWER = "report_answer"
+    REPORT_REPAIR = "report_repair"
 
 
 class LlmProfileSettings(BaseModel):
@@ -221,10 +223,13 @@ class AssistantSettings(BaseModel):
     collection_max_input_tokens: int = Field(default=64_000, ge=1_000)
     collection_map_max_output_tokens: int = Field(default=8_000, ge=100)
     collection_synthesis_max_output_tokens: int = Field(default=12_000, ge=100)
+    collection_max_selected_papers: int = Field(default=4, ge=1, le=50)
+    report_max_output_tokens: int = Field(default=12_000, ge=100)
     rewrite_prompt_path: Path | None = None
     equivalence_prompt_path: Path | None = None
     answer_prompt_path: Path | None = None
     repair_prompt_path: Path | None = None
+    report_prompt_path: Path | None = None
 
 
 class Settings(BaseSettings):
@@ -386,6 +391,7 @@ def _resolve_relative_paths(values: dict[str, Any], base_dir: Path) -> None:
             "equivalence_prompt_path",
             "answer_prompt_path",
             "repair_prompt_path",
+            "report_prompt_path",
         ):
             value = assistant.get(key)
             if isinstance(value, str) and value and not Path(value).is_absolute():

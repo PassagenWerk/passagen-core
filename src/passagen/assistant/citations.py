@@ -36,9 +36,30 @@ class PaperEvidenceIndex:
     parsed: ParsedPaper | None
 
 
-def validate_answer_citations(answer: StructuredAnswer, index: PaperEvidenceIndex) -> None:
+@dataclass(frozen=True, slots=True)
+class EvidenceIndex:
+    """Loaded evidence for every paper a multi-paper answer may cite."""
+
+    papers: tuple[PaperEvidenceIndex, ...]
+
+
+def validate_answer_citations(
+    answer: StructuredAnswer, index: PaperEvidenceIndex | EvidenceIndex
+) -> None:
+    if isinstance(index, PaperEvidenceIndex):
+        for citation in answer.citations:
+            _validate_citation(citation, index)
+        return
+    by_paper = {paper.snapshot.paper_id: paper for paper in index.papers}
     for citation in answer.citations:
-        _validate_citation(citation, index)
+        paper_index = by_paper.get(citation.paper_id)
+        if paper_index is None:
+            raise CitationValidationError(
+                f"Citation {citation.citation_id} references paper {citation.paper_id}, "
+                "which is outside the source snapshot "
+                f"({', '.join(sorted(by_paper)) or 'no papers'})"
+            )
+        _validate_citation(citation, paper_index)
 
 
 def _validate_citation(citation: Citation, index: PaperEvidenceIndex) -> None:

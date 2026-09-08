@@ -27,6 +27,25 @@ All notable changes to Passagen Core are documented in this file.
 
 ### Added
 
+- Phase 5 Core collection conversations, reports, and queued dispatch: schema version 10 adds the
+  `collection_reports` lifecycle table and extends `collection_artifacts` with report kinds.
+  `ConversationService` now scopes create/list/submit/execute to exactly one paper or collection;
+  collection turns snapshot every usable member artifact plus the fingerprint-matching synthesis,
+  reuse exact/semantic answers only within the same collection scope and fingerprint, and reject
+  scope-outside citations through a generalized multi-paper citation validator. Collection
+  retrieval is two-level: bounded lexical paper selection over titles, per-paper summaries, and
+  the collection synthesis (the actual selection is recorded in the context plan), then a
+  global-budget FTS5 raw-section search constrained to the selected papers and their snapshot
+  artifact hashes, using the English retrieval queries produced by question rewriting.
+  `CollectionReportService` generates review, comparison, gaps, and custom reports from a
+  versioned schema with bounded repair, explicit partial coverage, fingerprint-based reuse and
+  stale detection, synthesis reuse when versions match, per-run LLM accounting, and atomic
+  JSON/Markdown/source/input artifact publication with citation navigation metadata.
+  `CollectionSynthesisService` gained queued `submit_synthesis`/`execute_synthesis_run` entry
+  points, and the new `passagen.generation.GenerationRunDispatcher` claims and executes answer,
+  synthesis, and report runs consistently; startup interruption fails leftover queued/running
+  runs, pending answer messages, and reports so no product stays permanently running. CLI and
+  Web adapters remain separate Phase 5 deliverables.
 - Phase 4 Core collection synthesis: schema version 9 adds immutable collection artifact
   indexing; ordered Summary fingerprints drive reuse, force-regeneration, and structured stale
   detection. The public `CollectionSynthesisService` rejects missing summaries by default,

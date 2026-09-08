@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import text
 
@@ -128,6 +129,128 @@ class InMemorySectionRetrieval:
                 continue
             selected.append(candidate)
             used_tokens += section_tokens
+        return selected
+
+
+@dataclass(frozen=True, slots=True)
+class PaperCandidate:
+    """Compact per-paper document used by bounded lexical paper selection."""
+
+    paper_id: str
+    title: str | None
+    text: str
+
+
+def select_papers(
+    candidates: list[PaperCandidate],
+    queries: list[str],
+    *,
+    max_papers: int,
+) -> list[str]:
+    """Choose the most relevant papers for a query with deterministic lexical scoring.
+
+    The selection is bounded by ``max_papers``; when no candidate scores, the
+    leading papers in collection order are used so retrieval always has a
+    defined, recorded scope.
+    """
+
+    if len(candidates) <= max_papers:
+        return [candidate.paper_id for candidate in candidates]
+    terms = _terms(queries)
+    if not terms:
+        return [candidate.paper_id for candidate in candidates[:max_papers]]
+    scored = [
+        (_score(candidate.title or "", candidate.text, terms), -index, candidate.paper_id)
+        for index, candidate in enumerate(candidates)
+    ]
+    scored.sort(reverse=True)
+    selected = [paper_id for score, _neg_index, paper_id in scored if score > 0][:max_papers]
+    if not selected:
+        selected = [candidate.paper_id for candidate in candidates[:max_papers]]
+    return selected
+
+
+class CollectionFtsSectionRetrieval:
+    """FTS5 raw-section retrieval constrained to selected papers and snapshot hashes."""
+
+    def __init__(
+        self,
+        database_path: Path,
+        paper_shas: dict[str, str],
+        *,
+        chars_per_token: float = 4.0,
+    ) -> None:
+        self.database_path = database_path
+        self.paper_shas = dict(paper_shas)
+        self.chars_per_token = chars_per_token
+
+    def search(
+        self,
+        queries: list[str],
+        *,
+        max_sections: int,
+        max_tokens: int,
+    ) -> list[RetrievedSection]:
+        terms = _terms(queries)
+        if not terms or not self.paper_shas:
+            return []
+        match_query = " OR ".join(f'"{term}"' for term in terms)
+        scope_clauses: list[str] = []
+        parameters: dict[str, str] = {"query": match_query}
+        for index, (paper_id, sha256) in enumerate(sorted(self.paper_shas.items())):
+            scope_clauses.append(
+                f"(s.paper_id = :paper_{index} AND s.extracted_artifact_sha256 = :sha_{index})"
+            )
+            parameters[f"paper_{index}"] = paper_id
+            parameters[f"sha_{index}"] = sha256
+        with session_scope(self.database_path) as session:
+            rows = session.execute(
+                text(
+                    "SELECT s.paper_id, s.ordinal, s.title, s.text, s.pages_json, "
+                    "s.extracted_artifact_sha256, bm25(paper_sections_fts, 3.0, 1.0) AS rank "
+                    "FROM paper_sections_fts "
+                    "JOIN paper_sections AS s ON s.id = paper_sections_fts.rowid "
+                    f"WHERE paper_sections_fts MATCH :query AND ({' OR '.join(scope_clauses)}) "
+                    "ORDER BY rank, s.paper_id, s.ordinal"
+                ),
+                parameters,
+            ).all()
+        return self._select(rows, max_sections=max_sections, max_tokens=max_tokens)
+
+    def _select(
+        self, rows: Sequence[Any], *, max_sections: int, max_tokens: int
+    ) -> list[RetrievedSection]:
+        """Trim ranked rows by paper diversity, relevance, and the global token budget."""
+
+        paper_count = max(1, len(self.paper_shas))
+        soft_cap = max(1, math.ceil(max_sections / paper_count))
+        selected: list[RetrievedSection] = []
+        per_paper: dict[str, int] = {}
+        used_tokens = 0
+        for allow_over_cap in (False, True):
+            for row in rows:
+                if len(selected) >= max_sections:
+                    return selected
+                paper_id = str(row.paper_id)
+                if not allow_over_cap and per_paper.get(paper_id, 0) >= soft_cap:
+                    continue
+                text = str(row.text)
+                section_tokens = math.ceil(len(text) / self.chars_per_token)
+                if used_tokens + section_tokens > max_tokens:
+                    continue
+                selected.append(
+                    RetrievedSection(
+                        paper_id=paper_id,
+                        ordinal=int(row.ordinal),
+                        title=row.title,
+                        text=text,
+                        pages=tuple(int(page) for page in json.loads(row.pages_json)),
+                        artifact_sha256=str(row.extracted_artifact_sha256),
+                        score=-float(row.rank),
+                    )
+                )
+                per_paper[paper_id] = per_paper.get(paper_id, 0) + 1
+                used_tokens += section_tokens
         return selected
 
 

@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import ValidationError
 
 from passagen.assistant import repository as run_repository
-from passagen.assistant.citations import PaperEvidenceIndex, validate_answer_citations
+from passagen.assistant.citations import (
+    EvidenceIndex,
+    PaperEvidenceIndex,
+    validate_answer_citations,
+)
 from passagen.assistant.errors import (
     AnswerValidationError,
     AssistantError,
@@ -17,9 +22,11 @@ from passagen.assistant.errors import (
     ContextPlanError,
     ProviderCallError,
     ScopeError,
+    StaleSourceError,
 )
 from passagen.assistant.schemas import (
     ArtifactRef,
+    Citation,
     GenerationStage,
     PaperSourceSnapshot,
     QuestionIntent,
@@ -57,6 +64,14 @@ Citations must use artifact_kind summary_json, the exact paper/artifact IDs and 
 summary_path that resolves in that paper's Summary JSON. Do not invent absent evidence."""
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisSubmission:
+    """Outcome of submitting a synthesis: a reusable result or a queued run."""
+
+    run_id: str | None
+    result: CollectionSynthesisResult | None
+
+
 class CollectionSynthesisService:
     """Generate and persist reusable, citation-checked collection syntheses."""
 
@@ -82,9 +97,25 @@ class CollectionSynthesisService:
         allow_partial: bool = False,
         force: bool = False,
     ) -> CollectionSynthesisResult:
+        submission = self.submit_synthesis(collection_id, allow_partial=allow_partial, force=force)
+        if submission.result is not None:
+            return submission.result
+        if submission.run_id is None:
+            raise ScopeError("Collection synthesis submission produced no run")
+        return self.execute_synthesis_run(submission.run_id)
+
+    def submit_synthesis(
+        self,
+        collection_id: str,
+        *,
+        allow_partial: bool = False,
+        force: bool = False,
+    ) -> SynthesisSubmission:
+        """Reuse a fingerprint-matching synthesis or queue a generation run."""
+
         snapshot = build_collection_snapshot(self.database_path, self.data_dir, collection_id)
         fingerprint = source_fingerprint(snapshot)
-        summaries, missing = self._load_summaries(snapshot)
+        summaries, missing = load_collection_summaries(self.database_path, self.data_dir, snapshot)
         if missing and not allow_partial:
             raise ScopeError(
                 "Collection synthesis requires a valid summary_json for every paper; missing or "
@@ -97,34 +128,61 @@ class CollectionSynthesisService:
                 self.database_path, collection_id, source_fingerprint=fingerprint
             )
             if reused:
-                synthesis = self._read_synthesis(reused)
-                return CollectionSynthesisResult(
-                    synthesis=synthesis,
-                    run_id=reused[0].generation_run_id,
-                    artifacts=list(reused),
-                    source_status=SourceStatus(),
-                    disposition="reused",
-                    strategy="reused",
+                synthesis = read_synthesis_content(self.data_dir, reused)
+                return SynthesisSubmission(
+                    run_id=None,
+                    result=CollectionSynthesisResult(
+                        synthesis=synthesis,
+                        run_id=reused[0].generation_run_id,
+                        artifacts=list(reused),
+                        source_status=SourceStatus(),
+                        disposition="reused",
+                        strategy="reused",
+                    ),
                 )
         run_id = run_repository.create_generation_run(
             self.database_path,
             kind="collection_synthesis",
             collection_id=collection_id,
             source_snapshot_json=snapshot.model_dump_json(),
+            status="queued",
             reuse_policy=ReusePolicy.FORCE_REGENERATE if force else ReusePolicy.AUTO,
         )
-        included = [paper_id for paper_id, _summary, _source in summaries]
-        coverage = SynthesisCoverage(
-            included_paper_ids=included,
-            missing_summary_paper_ids=missing,
-            partial=bool(missing),
-        )
+        return SynthesisSubmission(run_id=run_id, result=None)
+
+    def execute_synthesis_run(self, run_id: str) -> CollectionSynthesisResult:
+        """Execute a queued or claimed synthesis run; used directly and by the worker."""
+
+        run = run_repository.start_generation_run(self.database_path, run_id)
+        if run.kind != "collection_synthesis" or run.collection_id is None:
+            raise ScopeError(f"Generation run {run_id} is not a collection synthesis run")
+        if run.source_snapshot_json is None:
+            raise ScopeError(f"Generation run {run_id} has no source snapshot")
+        collection_id = run.collection_id
+        snapshot = SourceSnapshot.model_validate_json(run.source_snapshot_json)
+        fingerprint = source_fingerprint(snapshot)
         try:
+            current = build_collection_snapshot(self.database_path, self.data_dir, collection_id)
+            if source_fingerprint(current) != fingerprint:
+                raise StaleSourceError(
+                    f"Collection {collection_id} sources changed after this run was submitted"
+                )
+            summaries, missing = load_collection_summaries(
+                self.database_path, self.data_dir, snapshot
+            )
+            if not summaries:
+                raise ScopeError("Collection has no valid paper summaries to synthesize")
+            included = [paper_id for paper_id, _summary, _source in summaries]
+            coverage = SynthesisCoverage(
+                included_paper_ids=included,
+                missing_summary_paper_ids=missing,
+                partial=bool(missing),
+            )
             synthesis, strategy = self._generate(run_id, summaries, coverage)
             artifacts = self._persist(run_id, collection_id, snapshot, synthesis, fingerprint)
         except Exception as exc:
             code = exc.code if isinstance(exc, AssistantError) else "internal_error"
-            repository.fail_synthesis_run(
+            repository.fail_generation_run(
                 self.database_path, run_id, error_code=code, error_message=str(exc)
             )
             raise
@@ -141,7 +199,7 @@ class CollectionSynthesisService:
         artifacts = repository.latest_synthesis_artifacts(self.database_path, collection_id)
         if not artifacts:
             return None
-        synthesis = self._read_synthesis(artifacts)
+        synthesis = read_synthesis_content(self.data_dir, artifacts)
         return CollectionSynthesisResult(
             synthesis=synthesis,
             run_id=artifacts[0].generation_run_id,
@@ -167,40 +225,13 @@ class CollectionSynthesisService:
             )
         except (OSError, ValidationError, ScopeError):
             return SourceStatus(stale=True, reasons=["source_missing"])
-        reasons = _snapshot_changes(saved, current)
+        reasons = collection_snapshot_changes(saved, current)
         return SourceStatus(stale=bool(reasons), reasons=reasons)
 
     def _load_summaries(
         self, snapshot: SourceSnapshot
     ) -> tuple[list[tuple[str, StructuredSummary, dict[str, object]]], list[str]]:
-        if snapshot.collection is None:
-            raise ScopeError("Collection synthesis requires a collection snapshot")
-        loaded: list[tuple[str, StructuredSummary, dict[str, object]]] = []
-        missing: list[str] = []
-        for paper in snapshot.collection.papers:
-            artifact_ref = next(
-                (artifact for artifact in paper.artifacts if artifact.kind == "summary_json"), None
-            )
-            artifact = get_artifact(self.database_path, paper.paper_id, "summary_json")
-            if artifact_ref is None or artifact is None:
-                missing.append(paper.paper_id)
-                continue
-            try:
-                summary = StructuredSummary.model_validate_json(
-                    (self.data_dir / artifact.path).read_text(encoding="utf-8")
-                )
-            except (OSError, ValidationError):
-                missing.append(paper.paper_id)
-                continue
-            source: dict[str, object] = {
-                "paper_id": paper.paper_id,
-                "title": paper.title,
-                "artifact_id": artifact_ref.artifact_id,
-                "artifact_sha256": artifact_ref.sha256,
-                "summary": summary.model_dump(mode="json", exclude_none=True),
-            }
-            loaded.append((paper.paper_id, summary, source))
-        return loaded, missing
+        return load_collection_summaries(self.database_path, self.data_dir, snapshot)
 
     def _generate(
         self,
@@ -423,37 +454,7 @@ class CollectionSynthesisService:
                         f"Comparison cell {row.paper_id}/{cell.dimension} lacks a citation "
                         "to its row paper"
                     )
-        by_id = {paper_id: (summary, source) for paper_id, summary, source in summaries}
-        for paper_id in {citation.paper_id for citation in synthesis.citations}:
-            if paper_id not in by_id:
-                raise ScopeError(f"Synthesis citation references unavailable paper {paper_id}")
-            summary, source = by_id[paper_id]
-            paper_snapshot = PaperSourceSnapshot(
-                paper_id=paper_id,
-                title=str(source["title"]) if source["title"] is not None else None,
-                status="summarized",
-                artifacts=[
-                    ArtifactRef(
-                        artifact_id=str(source["artifact_id"]),
-                        kind="summary_json",
-                        schema_version=summary.schema_version,
-                        sha256=str(source["artifact_sha256"]),
-                    )
-                ],
-            )
-            citations = [item for item in synthesis.citations if item.paper_id == paper_id]
-            answer = StructuredAnswer(
-                standalone_question="Collection synthesis citation validation",
-                intent=QuestionIntent.SYNTHESIS,
-                answer_markdown="Validation only",
-                citations=citations,
-            )
-            validate_answer_citations(
-                answer,
-                PaperEvidenceIndex(
-                    snapshot=paper_snapshot, summary=summary, outline=None, parsed=None
-                ),
-            )
+        validate_summary_citations(synthesis.citations, summaries)
 
     def _call_llm(
         self,
@@ -582,14 +583,7 @@ class CollectionSynthesisService:
             raise
 
     def _read_synthesis(self, artifacts: tuple[CollectionArtifact, ...]) -> CollectionSynthesis:
-        artifact = next(item for item in artifacts if item.kind == "synthesis_json")
-        try:
-            content = (self.data_dir / artifact.path).read_bytes()
-            if hashlib.sha256(content).hexdigest() != artifact.sha256:
-                raise ScopeError("Stored collection synthesis hash does not match its index")
-            return CollectionSynthesis.model_validate_json(content)
-        except (OSError, ValidationError) as exc:
-            raise ScopeError(f"Cannot load collection synthesis: {exc}") from exc
+        return read_synthesis_content(self.data_dir, artifacts)
 
     @staticmethod
     def _write_diagnostic(path: Path, payload: dict[str, object]) -> None:
@@ -598,6 +592,111 @@ class CollectionSynthesisService:
             (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode(),
             prefix="collection-",
         )
+
+
+def load_collection_summaries(
+    database_path: Path, data_dir: Path, snapshot: SourceSnapshot
+) -> tuple[list[tuple[str, StructuredSummary, dict[str, object]]], list[str]]:
+    """Load validated summaries and compact source dicts for snapshot papers.
+
+    Papers whose summary artifact is absent or unreadable are returned in the
+    missing list so callers can apply the default or explicit partial policy.
+    """
+
+    if snapshot.collection is None:
+        raise ScopeError("Collection synthesis requires a collection snapshot")
+    loaded: list[tuple[str, StructuredSummary, dict[str, object]]] = []
+    missing: list[str] = []
+    for paper in snapshot.collection.papers:
+        artifact_ref = next(
+            (artifact for artifact in paper.artifacts if artifact.kind == "summary_json"), None
+        )
+        artifact = get_artifact(database_path, paper.paper_id, "summary_json")
+        if artifact_ref is None or artifact is None:
+            missing.append(paper.paper_id)
+            continue
+        try:
+            summary = StructuredSummary.model_validate_json(
+                (data_dir / artifact.path).read_text(encoding="utf-8")
+            )
+        except (OSError, ValidationError):
+            missing.append(paper.paper_id)
+            continue
+        source: dict[str, object] = {
+            "paper_id": paper.paper_id,
+            "title": paper.title,
+            "artifact_id": artifact_ref.artifact_id,
+            "artifact_sha256": artifact_ref.sha256,
+            "summary": summary.model_dump(mode="json", exclude_none=True),
+        }
+        loaded.append((paper.paper_id, summary, source))
+    return loaded, missing
+
+
+def read_synthesis_content(
+    data_dir: Path, artifacts: tuple[CollectionArtifact, ...] | list[CollectionArtifact]
+) -> CollectionSynthesis:
+    artifact = next(item for item in artifacts if item.kind == "synthesis_json")
+    try:
+        content = (data_dir / artifact.path).read_bytes()
+        if hashlib.sha256(content).hexdigest() != artifact.sha256:
+            raise ScopeError("Stored collection synthesis hash does not match its index")
+        return CollectionSynthesis.model_validate_json(content)
+    except (OSError, ValidationError) as exc:
+        raise ScopeError(f"Cannot load collection synthesis: {exc}") from exc
+
+
+def summary_evidence_index(
+    summaries: list[tuple[str, StructuredSummary, dict[str, object]]],
+    paper_ids: list[str],
+) -> EvidenceIndex:
+    """Build the summary-only evidence used to resolve collection citations."""
+
+    by_id = {paper_id: (summary, source) for paper_id, summary, source in summaries}
+    papers: list[PaperEvidenceIndex] = []
+    for paper_id in paper_ids:
+        summary, source = by_id[paper_id]
+        papers.append(
+            PaperEvidenceIndex(
+                snapshot=PaperSourceSnapshot(
+                    paper_id=paper_id,
+                    title=str(source["title"]) if source["title"] is not None else None,
+                    status="summarized",
+                    artifacts=[
+                        ArtifactRef(
+                            artifact_id=str(source["artifact_id"]),
+                            kind="summary_json",
+                            schema_version=summary.schema_version,
+                            sha256=str(source["artifact_sha256"]),
+                        )
+                    ],
+                ),
+                summary=summary,
+                outline=None,
+                parsed=None,
+            )
+        )
+    return EvidenceIndex(papers=tuple(papers))
+
+
+def validate_summary_citations(
+    citations: list[Citation],
+    summaries: list[tuple[str, StructuredSummary, dict[str, object]]],
+) -> None:
+    """Validate collection citations against summary-only snapshot evidence."""
+
+    by_id = {paper_id: (summary, source) for paper_id, summary, source in summaries}
+    cited_paper_ids = sorted({citation.paper_id for citation in citations})
+    unavailable = [paper_id for paper_id in cited_paper_ids if paper_id not in by_id]
+    if unavailable:
+        raise ScopeError("Citation references unavailable papers: " + ", ".join(unavailable))
+    answer = StructuredAnswer(
+        standalone_question="Collection citation validation",
+        intent=QuestionIntent.SYNTHESIS,
+        answer_markdown="Validation only",
+        citations=citations,
+    )
+    validate_answer_citations(answer, summary_evidence_index(summaries, cited_paper_ids))
 
 
 def _schema() -> str:
@@ -611,7 +710,7 @@ def _prompt(operation: str, documents: list[dict[str, object]]) -> str:
     )
 
 
-def _snapshot_changes(previous: SourceSnapshot, current: SourceSnapshot) -> list[str]:
+def collection_snapshot_changes(previous: SourceSnapshot, current: SourceSnapshot) -> list[str]:
     if source_fingerprint(previous) == source_fingerprint(current):
         return []
     if previous.collection is None or current.collection is None:

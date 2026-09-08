@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from passagen.assistant.errors import ContextPlanError
 from passagen.assistant.schemas import (
     AnswerKind,
     ContextPlan,
@@ -58,6 +59,19 @@ _EXPLANATION_CUES = (
     "explain",
     "how does",
     "why does",
+)
+_COMPARISON_CUES = (
+    "对比",
+    "比较",
+    "区别",
+    "差异",
+    "相比",
+    "compare",
+    "comparison",
+    "difference",
+    "differ",
+    "versus",
+    " vs ",
 )
 
 
@@ -155,3 +169,72 @@ def deterministic_plan(
 
 def _matches(text: str, cues: tuple[str, ...]) -> bool:
     return any(cue in text for cue in cues)
+
+
+def collection_deterministic_plan(
+    *,
+    standalone_question: str,
+    retrieval_queries: list[str],
+    requires_exact_quote: bool,
+    has_history: bool,
+    available_sources: set[ContextSource],
+) -> ContextPlan:
+    """Route a collection-scoped question to synthesis, per-paper summaries, and raw.
+
+    The paper selection happens after planning; the service records the actual
+    selected papers in the returned plan before the answer is generated.
+    """
+
+    text = standalone_question.casefold()
+    intent = QuestionIntent.SYNTHESIS
+    answer_kind = AnswerKind.SYNTHESIS
+    sources = [ContextSource.COLLECTION_SUMMARY, ContextSource.PAPER_SUMMARIES]
+    if requires_exact_quote or _matches(text, _FACT_CUES):
+        intent = QuestionIntent.FACT_LOOKUP
+        answer_kind = AnswerKind.DIRECT
+        sources = [
+            ContextSource.COLLECTION_SUMMARY,
+            ContextSource.PAPER_SUMMARIES,
+            ContextSource.RAW,
+        ]
+    elif _matches(text, _COMPARISON_CUES):
+        intent = QuestionIntent.COMPARISON
+        answer_kind = AnswerKind.COMPARATIVE
+        sources = [
+            ContextSource.COLLECTION_SUMMARY,
+            ContextSource.PAPER_SUMMARIES,
+            ContextSource.RAW,
+        ]
+    elif _matches(text, _EXPLANATION_CUES):
+        intent = QuestionIntent.EXPLANATION
+        answer_kind = AnswerKind.DIRECT
+        sources = [
+            ContextSource.COLLECTION_SUMMARY,
+            ContextSource.PAPER_SUMMARIES,
+            ContextSource.RAW,
+        ]
+    selected = [source for source in sources if source in available_sources]
+    if not selected:
+        for fallback in (
+            ContextSource.COLLECTION_SUMMARY,
+            ContextSource.PAPER_SUMMARIES,
+            ContextSource.RAW,
+        ):
+            if fallback in available_sources:
+                selected = [fallback]
+                break
+    if not selected:
+        raise ContextPlanError("the collection snapshot has no usable context sources")
+    queries = list(retrieval_queries)
+    if ContextSource.RAW in selected and not queries:
+        queries = [standalone_question]
+    if has_history:
+        selected.insert(0, ContextSource.CONVERSATION)
+    return ContextPlan(
+        standalone_question=standalone_question,
+        intent=intent,
+        sources=selected,
+        retrieval_queries=queries,
+        requires_exact_quote=requires_exact_quote,
+        answer_kind=answer_kind,
+    )
