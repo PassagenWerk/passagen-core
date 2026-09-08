@@ -10,6 +10,8 @@ All notable changes to Passagen Core are documented in this file.
   `deepseek-flash-v4` default model.
 - Updated the built-in QA answer prompt to request thorough, structured responses and removed
   obsolete bundled QA prompt versions.
+- Raised the storage schema to version 10 for conversation, section-index, collection-artifact,
+  and report persistence.
 
 ### Fixed
 
@@ -21,72 +23,44 @@ All notable changes to Passagen Core are documented in this file.
 - Turn submission now persists its run and adjacent user/assistant messages in one transaction;
   queued turns cannot consume later questions as conversation history, and run claiming uses one
   conditional database update.
+- Queued turns reject changed sources instead of attributing newly rebuilt artifacts to an old
+  source snapshot.
 - Service restart recovery now marks pending answer messages failed alongside interrupted runs,
   archive search includes tags, model-returned question/intent metadata is normalized to the
   planner result, and answer/repair calls enforce their configured context budget.
 
 ### Added
 
-- Phase 5 Core collection conversations, reports, and queued dispatch: schema version 10 adds the
-  `collection_reports` lifecycle table and extends `collection_artifacts` with report kinds.
-  `ConversationService` now scopes create/list/submit/execute to exactly one paper or collection;
-  collection turns snapshot every usable member artifact plus the fingerprint-matching synthesis,
-  reuse exact/semantic answers only within the same collection scope and fingerprint, and reject
-  scope-outside citations through a generalized multi-paper citation validator. Collection
-  retrieval is two-level: bounded lexical paper selection over titles, per-paper summaries, and
-  the collection synthesis (the actual selection is recorded in the context plan), then a
-  global-budget FTS5 raw-section search constrained to the selected papers and their snapshot
-  artifact hashes, using the English retrieval queries produced by question rewriting.
-  `CollectionReportService` generates review, comparison, gaps, and custom reports from a
-  versioned schema with bounded repair, explicit partial coverage, fingerprint-based reuse and
-  stale detection, synthesis reuse when versions match, per-run LLM accounting, and atomic
-  JSON/Markdown/source/input artifact publication with citation navigation metadata.
-  `CollectionSynthesisService` gained queued `submit_synthesis`/`execute_synthesis_run` entry
-  points, and the new `passagen.generation.GenerationRunDispatcher` claims and executes answer,
-  synthesis, and report runs consistently; startup interruption fails leftover queued/running
-  runs, pending answer messages, and reports so no product stays permanently running. CLI and
-  Web adapters remain separate Phase 5 deliverables.
-- Phase 4 Core collection synthesis: schema version 9 adds immutable collection artifact
-  indexing; ordered Summary fingerprints drive reuse, force-regeneration, and structured stale
-  detection. The public `CollectionSynthesisService` rejects missing summaries by default,
-  supports explicit partial coverage, uses bounded summary-only direct or map/reduce generation,
-  validates every cross-paper citation, accounts for every LLM call, and atomically publishes
-  deterministic JSON, Markdown, and source-manifest artifacts. CLI integration remains a
-  separate Phase 4 deliverable.
-- Phase 3 assistant foundation: schema version 8 materializes parsed paper sections into an
-  FTS5 index, keeps the index transactionally aligned with parsed artifact metadata, and lazily
-  indexes existing libraries. Exact same-scope questions with compatible source fingerprints
-  now reuse a citation-validated answer without another answer-model call; callers can persist a
-  force-regenerate policy, inspect generated/reused disposition, and compute structured stale
-  reasons. Bounded same-paper candidates receive one conservative semantic decision: only
-  high-confidence equivalents are reused, while high-confidence partial matches are supplied as
-  previous-QA context for a new answer. Queued turns reject changed sources rather than
-  attributing new content to an old snapshot.
-- `passagen.assistant` asynchronous turn execution for the Web adapter (Phase 2 support):
-  `submit_turn` persists the question and queues a generation run, `execute_turn` runs a queued
-  or claimed turn from its submission-time source snapshot, `claim_next_queued_run` backs the
-  single-worker runner, and leftover active runs can be marked interrupted on startup.
-- `passagen.assistant` structured QA archive: archive/unarchive with title and tags, LIKE-escaped
-  search over question, answer, and archive metadata, full structured JSON export, and per-run
-  generation LLM call listing for token summaries.
-- `passagen.assistant` single-paper conversation service (Phase 1 of the collection research and
-  exploration roadmap): persistent conversations and messages, LLM question rewriting with
-  English retrieval queries, deterministic context routing across conversation history, Summary,
-  Outline, and raw sections, in-memory lexical section retrieval behind a swappable protocol,
-  token-budgeted context assembly, structured answers with citation validation and one bounded
-  repair, atomic turn persistence, per-stage `generation_llm_calls` accounting, and prompt /
-  response / error diagnostics under `data/runs/<run-id>/llm/<call-id>/`. Failed turns keep the
-  user question visible, never persist half an answer, and can be retried; leftover active
-  generation runs are markable as interrupted on restart.
-- `passagen.assistant`: versioned contracts for persistent paper/collection question answering
-  (Phase 0 of the collection research and exploration roadmap) — Conversation, Message,
-  QaRecord, Citation, SourceSnapshot, ContextPlan, and StructuredAnswer schemas with citation
-  and scope validation, canonical source fingerprints, stable error codes, prompt/schema/
-  retrieval version constants, and a local evaluation question set that never calls a real LLM.
-- Schema version 6 storage for the assistant domain: `conversations`,
-  `conversation_messages`, `qa_records`, `qa_citations`, `generation_runs`, and
-  `generation_llm_calls` tables with scope checks, unique message linkage, page-range checks,
-  and cascading deletes.
+- Persistent paper and collection conversations with versioned message, QA, citation, source
+  snapshot, and context-plan contracts. Answers can combine conversation history, previous QA,
+  Summary, Outline, and selected raw sections while validating every cited artifact, locator,
+  page range, and source hash.
+- Asynchronous question turns with atomic submission and completion, per-stage LLM accounting,
+  prompt/response diagnostics, stable failure states, and retry without saving partial answers.
+- Structured answer archives with titles, tags, escaped search, full JSON export, and generated
+  versus reused provenance.
+- Full-text section retrieval backed by a transactionally maintained SQLite FTS5 index, with lazy
+  indexing for existing libraries. Chinese questions can use rewritten English retrieval terms to
+  locate English paper sections.
+- Duplicate question reuse constrained by scope, normalized question, source fingerprint, and
+  prompt/schema compatibility. Compatible exact questions skip the answer model; conservative
+  semantic matches reuse only high-confidence equivalents, while partial matches become previous
+  QA context for a newly generated answer. Callers can force regeneration, inspect reuse
+  provenance, and receive structured stale reasons.
+- Collection synthesis and comparison artifacts with ordered source fingerprints, complete or
+  explicitly partial coverage, bounded summary-only direct and map/reduce generation, validated
+  cross-paper citations, deterministic JSON/Markdown output, source manifests, reuse, force
+  regeneration, and stale detection.
+- Collection reports for review, comparison, research gaps, and custom questions, including
+  versioned structured output, citation navigation metadata, bounded repair, run and artifact
+  lifecycle persistence, synthesis reuse when source versions match, and explicit partial or stale
+  coverage.
+- Multi-paper collection context planning and two-level retrieval: bounded paper selection from
+  collection synthesis and per-paper summaries, followed by global-budget FTS5 section search
+  limited to the selected papers and their snapshotted artifact hashes.
+- A shared generation-run dispatcher that claims and executes answer, synthesis, and report runs
+  with consistent lifecycle and token accounting, and interrupt recovery that prevents answers,
+  syntheses, and reports from remaining permanently running after a restart.
 
 ## [0.5.0] - 2026-09-05
 
