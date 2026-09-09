@@ -94,19 +94,60 @@ def test_flavor_controls_reasoning_without_inspecting_url(monkeypatch: pytest.Mo
     assert provider.generate("summarize", max_tokens=1000).content == "{}"
 
 
-def test_openai_flavor_uses_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_flavor_uses_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
 
     def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://api.deepseek.com/v1/responses"
         payload = json.loads(request.content)
-        assert "thinking" not in payload
-        assert payload["reasoning_effort"] == "none"
-        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+        assert payload == {
+            "model": "deepseek-flash-v4",
+            "input": "summarize",
+            "max_output_tokens": 1000,
+            "text": {"format": {"type": "json_object"}},
+            "reasoning": {"effort": "none"},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "{}"}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 4,
+                    "output_tokens": 3,
+                    "output_tokens_details": {"reasoning_tokens": 1},
+                },
+            },
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(respond))
     provider = OpenAICompatibleProvider(LlmProfileSettings(flavor=LlmFlavor.OPENAI), client=client)
 
-    assert provider.generate("summarize", max_tokens=1000).content == "{}"
+    result = provider.generate("summarize", max_tokens=1000)
+
+    assert result.content == "{}"
+    assert result.input_tokens == 4
+    assert result.output_tokens == 3
+    assert result.reasoning_tokens == 1
+    assert result.finish_reason == "stop"
+
+
+def test_http_error_includes_bounded_response_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PASSAGEN_API_KEY", "test-key")
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "Unsupported parameter: max_tokens"}},
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda _request: response))
+    provider = OpenAICompatibleProvider(LlmProfileSettings(), client=client)
+
+    with pytest.raises(LlmProviderError, match="Unsupported parameter: max_tokens"):
+        provider.generate("summarize", max_tokens=1000)
 
 
 def test_empty_truncated_response_can_be_retried(monkeypatch: pytest.MonkeyPatch) -> None:
