@@ -222,7 +222,7 @@ def test_report_partial_coverage_requires_explicit_opt_in(tmp_path: Path) -> Non
     assert result.report.coverage.included_paper_ids == ["paper-a", "paper-b"]
 
 
-def test_report_citation_failure_is_repaired_once(tmp_path: Path) -> None:
+def test_report_citation_failure_is_repaired(tmp_path: Path) -> None:
     env = collection_env(tmp_path)
     provider = _report_provider(env, bad_calls=1)
     service = _service(env, provider)
@@ -241,9 +241,30 @@ def test_report_citation_failure_is_repaired_once(tmp_path: Path) -> None:
     assert stages == ["answer", "repair"]
 
 
-def test_report_fails_atomically_after_bounded_repair(tmp_path: Path) -> None:
+def test_report_retries_when_first_repair_is_still_invalid(tmp_path: Path) -> None:
     env = collection_env(tmp_path)
     provider = _report_provider(env, bad_calls=2)
+    service = _service(env, provider)
+
+    result = service.create_report(env.collection_id, ReportKind.REVIEW)
+
+    assert result.record.status == "completed"
+    with connect_database(env.database_path) as connection:
+        stages = [
+            row[0]
+            for row in connection.execute(
+                "SELECT stage FROM generation_llm_calls WHERE generation_run_id = ?",
+                (result.record.run_id,),
+            )
+        ]
+    assert stages == ["answer", "repair", "repair"]
+    assert "referenced but missing from the citations array" in provider.prompts[-1]
+    assert "Do not return the candidate unchanged" in provider.prompts[-1]
+
+
+def test_report_fails_atomically_after_bounded_repair(tmp_path: Path) -> None:
+    env = collection_env(tmp_path)
+    provider = _report_provider(env, bad_calls=3)
     service = _service(env, provider)
 
     with pytest.raises(AnswerValidationError):

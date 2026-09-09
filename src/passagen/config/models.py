@@ -225,6 +225,7 @@ class AssistantSettings(BaseModel):
     collection_synthesis_max_output_tokens: int = Field(default=12_000, ge=100)
     collection_max_selected_papers: int = Field(default=4, ge=1, le=50)
     report_max_output_tokens: int = Field(default=12_000, ge=100)
+    report_validation_max_attempts: int = Field(default=2, ge=1, le=3)
     rewrite_prompt_path: Path | None = None
     equivalence_prompt_path: Path | None = None
     answer_prompt_path: Path | None = None

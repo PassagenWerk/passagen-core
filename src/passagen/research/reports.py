@@ -351,14 +351,18 @@ class CollectionReportService:
         response = self._call_llm(
             run_id, GenerationStage.ANSWER, LlmPurpose.REPORT_ANSWER, prompt, max_tokens=max_tokens
         )
+        candidate = response.content
         try:
-            return self._parse_and_validate(response.content, summaries, coverage)
+            return self._parse_and_validate(candidate, summaries, coverage)
         except (
             ValidationError,
             CitationValidationError,
             AnswerValidationError,
             ScopeError,
         ) as exc:
+            validation_error: Exception = exc
+
+        for attempt in range(1, self.assistant_settings.report_validation_max_attempts + 1):
             repair = load_prompt_template(
                 "qa-repair-v3.txt",
                 None,
@@ -367,8 +371,17 @@ class CollectionReportService:
                 schema=_report_schema(),
                 question=instructions,
                 context=sources,
-                validation_error=str(exc),
-                candidate=response.content,
+                validation_error=str(validation_error),
+                candidate=candidate,
+            )
+            repair += (
+                "\nReport-specific checks:\n"
+                "- If a citation is unknown, its id is referenced but missing from the citations "
+                "array. Add a complete, source-backed citation object for that id, or remove every "
+                "claim and body reference that uses it.\n"
+                "- Do not return the candidate unchanged. Verify that every citation_id used by "
+                "top-level claims, section claims, and body_markdown has a matching object in the "
+                "citations array.\n"
             )
             repaired = self._call_llm(
                 run_id,
@@ -379,10 +392,21 @@ class CollectionReportService:
             )
             try:
                 return self._parse_and_validate(repaired.content, summaries, coverage)
-            except (ValidationError, CitationValidationError, ScopeError) as repair_error:
-                raise AnswerValidationError(
-                    f"Collection report failed validation after one repair: {repair_error}"
-                ) from repair_error
+            except (
+                ValidationError,
+                CitationValidationError,
+                AnswerValidationError,
+                ScopeError,
+            ) as repair_error:
+                validation_error = repair_error
+                candidate = repaired.content
+                if attempt == self.assistant_settings.report_validation_max_attempts:
+                    raise AnswerValidationError(
+                        "Collection report failed validation after "
+                        f"{attempt} repair attempts: {repair_error}"
+                    ) from repair_error
+
+        raise AssertionError("at least one report validation repair attempt is required")
 
     def _parse_and_validate(
         self,
