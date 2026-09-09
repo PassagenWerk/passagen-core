@@ -19,6 +19,7 @@ README 中的仓库链接指向 GitHub；在 GitLab 或 Gitea 镜像中，对应
 - 保留 Author Abstract 原文，并生成经过校验的 LLM-assisted cleaned view。
 - 生成结构化英文 Summary 和技术 Outline。
 - 管理可恢复的 processing run、论文状态、标签、集合和 artifact。
+- 生成带 citation 校验的 Collection intelligence、Research Documents 和 collection Ask 回答。
 - 提供数据库迁移、完整性校验和安全的文件访问规则。
 
 ## 处理流程
@@ -49,10 +50,29 @@ uv sync --frozen
 
 CLI 和 Web 的源码环境会通过相邻 checkout 使用 Core，无需单独启动服务。
 
+## Docker
+
+Core 本身不是独立服务，因此不单独发布运行容器。Passagen Web 的 multi-stage Docker 镜像会在
+构建时引入相邻的 Core checkout，并把 Core、Web API 和已编译前端装入同一运行镜像：
+
+```bash
+git clone https://github.com/PassagenWerk/passagen-core.git
+git clone https://github.com/PassagenWerk/passagen-web.git
+cd passagen-web
+cp .env.example .env
+docker compose build
+docker compose up -d
+```
+
+初始化 data directory、配置 API key、局域网 origin 和 volume 权限的完整步骤见
+[Passagen Web Docker 部署](https://github.com/PassagenWerk/passagen-web/blob/main/docs/user/docker.md)。
+
 ## 配置
 
 CLI 和 Web 读取同一个 `<data-dir>/passagen.yaml`。DeepSeek、GROBID、Crossref、arXiv、
 pipeline 参数和环境变量覆盖方式见[共享配置指南](docs/user/configuration.md)。
+LLM 层同时支持 DeepSeek API 和 OpenAI Responses API 兼容端点，并可按 task route 将不同
+provider/profile 分配给处理、问答和 Collection research 任务。
 
 ## 常见问题
 

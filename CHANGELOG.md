@@ -2,6 +2,29 @@
 
 All notable changes to Passagen Core are documented in this file.
 
+## [0.7.0] - 2026-09-10
+
+### Added
+
+- Collection synthesis schema v2 with explicit paper roles, comparison matrices, agreements,
+  disagreements, complementary contributions, gaps, and open questions.
+- LLM-generated Research Document titles and complete deletion of terminal documents, their
+  artifacts, generation runs, LLM call records, and diagnostics.
+
+### Changed
+
+- OpenAI-flavor providers now use the Responses API and parse Responses output, usage, and
+  incomplete status while preserving useful HTTP error details.
+- Documented all task-aware LLM routes, including the four collection research purposes.
+- Report prompt v2 now asks for a concise title grounded in the generated document.
+
+### Fixed
+
+- Collection Ask validates citations from the complete matching synthesis while keeping detailed
+  context limited to retrieved papers, and cannot cite the synthesis artifact directly.
+- Collection report validation accepts JSONPath root prefixes and bounds repair prompts after
+  oversized generation output.
+
 ## [0.6.0] - 2026-09-09
 
 ### Changed
