@@ -113,9 +113,12 @@ export PASSAGEN_API_KEY=your-deepseek-api-key
 不要把 key 写入 YAML。Passagen 不会在配置输出、普通日志、数据库或诊断 artifact 中保存
 key。环境变量必须在启动 CLI 命令或 Web 服务的同一个 shell 中设置。
 
-`max_context_window` 必须与实际模型能力一致。`flavor` 决定请求使用 `deepseek` 的
-`thinking` 参数还是 `openai` 的 reasoning 参数；不会根据 URL 猜测。`reasoning` 必须显式设置为
-`enable` 或 `disable`。如果替换模型，应同时检查 `base_url`、`model`、`flavor` 和上下文窗口。
+`max_context_window` 必须与实际模型能力一致。`flavor: deepseek` 使用 Chat Completions API 和
+`thinking` 参数；`flavor: openai` 使用 Responses API 和 `reasoning.effort`。Passagen 不会根据
+URL 猜测 flavor。`base_url` 应包含供应商要求的 API 前缀，例如配置
+`https://api.openmodel.ai/v1` 后，请求地址为 `https://api.openmodel.ai/v1/responses`。
+`reasoning` 必须显式设置为 `enable` 或 `disable`。如果替换模型，应同时检查 `base_url`、
+`model`、`flavor` 和上下文窗口。
 
 默认 pipeline 预算按 `deepseek-flash-v4` 的 1M 上下文设置：完整论文优先单次总结，分层总结的
 单块输入上限为 128K，并为 summary 和 outline 保留较大的结构化输出空间。Abstract cleanup 和
@@ -151,11 +154,35 @@ providers:
       qa_answer: reasoning
 ```
 
-可路由任务为 `abstract_cleanup`、`summary_evidence`、`summary_reduce`、
-`summary_synthesis`、`summary_repair`、`outline_synthesis`、`qa_rewrite`、`qa_equivalence`、
-`qa_answer`、`qa_repair`、`collection_synthesis`、`collection_map`、`collection_reduce`、
-`collection_repair`、`report_answer` 和 `report_repair`。Profile 必须完整配置；`default` 是保留
-名称，不能出现在 `profiles` 中。
+每个 task key 路由一次特定用途的 LLM 调用：
+
+| Task | 调用时机与职责 |
+|---|---|
+| `abstract_cleanup` | 清理或修复论文 abstract，输出结构化的 abstract 候选。只影响启用了 abstract fixing 的处理流程。 |
+| `summary_evidence` | 分层总结时逐块读取论文正文并提取带页码的 evidence。长论文可能调用多次，适合吞吐量高、成本较低的模型。完整论文能直接总结时不会调用。 |
+| `summary_reduce` | 合并后的 chunk evidence 超出最终总结模型上下文时，压缩 evidence。可能调用多次；上下文窗口会影响分组大小。无需压缩时不会调用。 |
+| `summary_synthesis` | 将完整论文或已合并的 evidence 生成最终 Structured Summary。这是论文总结质量的主要模型。 |
+| `summary_repair` | Structured Summary 不符合 schema 或 evidence 约束时修复候选结果。应支持与 synthesis 相同的结构化输出，并具有足够的上下文窗口。 |
+| `outline_synthesis` | 从论文内容生成最终 Markdown outline。 |
+| `qa_rewrite` | 结合最近对话，把追问改写为独立问题和检索 query。Paper Ask 与 Collection Ask 都会使用。 |
+| `qa_equivalence` | 判断当前问题能否完整或部分复用已有 QA artifact。该判断不可用时会跳过复用并继续正常回答。 |
+| `qa_answer` | 根据检索到的 Summary、outline 或原文 evidence 生成带 citation 的 Paper/Collection Ask 答案。 |
+| `qa_repair` | QA 答案 schema、citation 或引用文本校验失败时修复答案。 |
+| `collection_synthesis` | Collection 的全部 Summary 能在单个 prompt 中放入时，直接生成最终 Collection Intelligence。它不会用于超预算 Collection 的分批步骤。 |
+| `collection_map` | direct prompt 超预算时，把 Collection 分批，并为每批 Summary 生成一个可校验的中间 synthesis。批次数量由该 profile 的上下文窗口和 `collection_max_input_tokens` 共同决定。 |
+| `collection_reduce` | 合并一个或多个 map 中间结果，生成最终 Collection Intelligence；中间结果仍过大时会执行多轮 reduce。 |
+| `collection_repair` | 任意 direct、map 或 reduce synthesis 未通过 schema、coverage 或 citation 校验时，修复该候选结果。未显式路由时使用 `default`，并不自动沿用产生候选结果的 profile。 |
+| `report_answer` | 使用 Collection Summary 和可用的 synthesis 生成 Review、Comparison、Gaps 或 Custom Research Document。 |
+| `report_repair` | Research Document 未通过 schema 或 citation 校验时执行修复，最多调用 `report_validation_max_attempts` 次。 |
+
+Profile 必须完整配置；`default` 是保留名称，不能出现在 `profiles` 中。不同 task 可以指向同一个
+profile。未出现在 `tasks` 中的 task 使用 `default`，不会自动继承相邻阶段的路由。例如只配置
+`collection_synthesis: gpt` 时，direct synthesis 使用 `gpt`，但失败后的
+`collection_repair` 仍使用 `default`。
+
+Collection 是否选择 direct 或 map/reduce 由输入预算自动决定。direct 调用在 generation log 中
+可能显示 `stage: reduce`，但其路由 task 仍是 `collection_synthesis`；`stage` 表示生成流水线阶段，
+task key 表示选择哪个 LLM profile。
 
 ## Assistant
 
