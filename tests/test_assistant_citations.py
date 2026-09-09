@@ -123,6 +123,12 @@ def test_valid_summary_citation_passes() -> None:
     validate_answer_citations(_answer(_summary_citation()), _index())
 
 
+def test_summary_citation_accepts_jsonpath_root() -> None:
+    validate_answer_citations(
+        _answer(_summary_citation(summary_path="$.evaluation.results[0]")), _index()
+    )
+
+
 def test_citation_from_another_paper_is_rejected() -> None:
     with pytest.raises(CitationValidationError, match="outside the source snapshot"):
         validate_answer_citations(_answer(_summary_citation(paper_id="paper-9")), _index())

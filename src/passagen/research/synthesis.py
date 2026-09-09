@@ -66,7 +66,8 @@ Create one paper_role for every included paper. Ground agreements, disagreements
 contributions, gaps, and open questions in citations; use empty arrays when evidence does not
 support a category. Keep the executive overview concise and evidence-led.
 Citations must use artifact_kind summary_json, the exact paper/artifact IDs and SHA-256, and a
-summary_path that resolves in that paper's Summary JSON. Do not invent absent evidence."""
+summary_path that resolves in that paper's Summary JSON. Paths may use forms such as
+design.components[0] or $.design.components[0]. Do not invent absent evidence."""
 
 
 @dataclass(frozen=True, slots=True)

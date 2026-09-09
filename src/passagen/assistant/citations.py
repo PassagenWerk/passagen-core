@@ -128,6 +128,7 @@ def _validate_summary_locator(citation: Citation, summary: StructuredSummary | N
 
 def _resolve_summary_path(summary: StructuredSummary, path: str) -> object:
     node: object = summary.model_dump(mode="json")
+    path = path.removeprefix("$.")
     for segment in path.split("."):
         match = _PATH_SEGMENT.fullmatch(segment)
         if match is None:
