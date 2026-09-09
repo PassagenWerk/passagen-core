@@ -117,7 +117,7 @@ def load_qa_prompt_templates(
 
 def load_report_prompt_template(path: Path | None) -> PromptTemplate:
     return load_prompt_template(
-        "report-v1.txt",
+        "report-v2.txt",
         path,
         variables={"schema", "instructions", "sources"},
     )

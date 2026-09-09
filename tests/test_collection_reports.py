@@ -15,6 +15,7 @@ from support import FakeProvider
 
 from passagen.assistant.errors import (
     AnswerValidationError,
+    AssistantNotFoundError,
     ScopeError,
     StaleSourceError,
 )
@@ -117,7 +118,7 @@ def test_create_review_report_persists_artifacts_and_run(tmp_path: Path) -> None
     assert result.disposition == "generated"
     assert result.record.status == "completed"
     assert result.record.kind is ReportKind.REVIEW
-    assert result.record.title == "Literature review: Systems reading list"
+    assert result.record.title == "Generated title"
     assert result.record.run_id is not None
     assert result.record.report_artifact_id is not None
     report = result.report
@@ -147,7 +148,7 @@ def test_create_review_report_persists_artifacts_and_run(tmp_path: Path) -> None
             "WHERE generation_run_id = ?",
             (result.record.run_id,),
         ).fetchall()
-    assert [tuple(row) for row in call_rows] == [("answer", "1", "1")]
+    assert [tuple(row) for row in call_rows] == [("answer", "2", "1")]
 
 
 def test_report_kinds_and_custom_prompt_rules(tmp_path: Path) -> None:
@@ -162,7 +163,8 @@ def test_report_kinds_and_custom_prompt_rules(tmp_path: Path) -> None:
         env.collection_id, ReportKind.CUSTOM, user_prompt="哪篇论文延迟最低？"
     )
     assert custom.record.user_prompt == "哪篇论文延迟最低？"
-    assert "哪篇论文延迟最低？" in custom.report.title
+    assert custom.record.title == "Generated title"
+    assert custom.report.title == "Generated title"
 
     with pytest.raises(ScopeError):
         service.create_report(env.collection_id, ReportKind.CUSTOM, user_prompt="  ")
@@ -184,6 +186,55 @@ def test_completed_report_is_reused_until_forced(tmp_path: Path) -> None:
     assert forced.disposition == "generated"
     assert forced.record.id != first.record.id
     assert len(provider.prompts) == 2
+
+
+def test_delete_report_removes_record_run_and_files(tmp_path: Path) -> None:
+    env = collection_env(tmp_path)
+    service = _service(env, _report_provider(env))
+    result = service.create_report(env.collection_id, ReportKind.REVIEW)
+    report_root = env.data_dir / "collections" / "reports" / result.record.id
+    run_root = env.data_dir / "runs" / (result.record.run_id or "")
+    assert report_root.is_dir()
+    assert run_root.is_dir()
+
+    service.delete_report(result.record.id)
+
+    with pytest.raises(AssistantNotFoundError):
+        service.get_report(result.record.id)
+    assert not report_root.exists()
+    assert not run_root.exists()
+    with connect_database(env.database_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM collection_artifacts WHERE generation_run_id = ?",
+                (result.record.run_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM generation_runs WHERE id = ?", (result.record.run_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM generation_llm_calls WHERE generation_run_id = ?",
+                (result.record.run_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_delete_report_rejects_active_generation(tmp_path: Path) -> None:
+    env = collection_env(tmp_path)
+    service = _service(env, _report_provider(env))
+    submission = service.submit_report(env.collection_id, ReportKind.REVIEW)
+
+    with pytest.raises(ScopeError, match="while it is generating"):
+        service.delete_report(submission.report_id or "")
+
+    assert service.get_report(submission.report_id or "").record.status == "queued"
 
 
 def test_report_goes_stale_when_sources_change(tmp_path: Path) -> None:

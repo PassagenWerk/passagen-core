@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -238,7 +239,6 @@ class CollectionReportService:
             report = report.model_copy(
                 update={
                     "kind": record.kind,
-                    "title": record.title,
                     "user_prompt": record.user_prompt,
                     "synthesis_artifact_id": synthesis_artifact_id,
                     "coverage": coverage,
@@ -289,6 +289,20 @@ class CollectionReportService:
             )
             for record in repository.list_reports(self.database_path, collection_id)
         )
+
+    def delete_report(self, report_id: str) -> None:
+        """Delete a completed or failed report and its persisted files."""
+
+        record = repository.get_report(self.database_path, report_id)
+        if record is None:
+            raise AssistantNotFoundError(f"Collection report not found: {report_id}")
+        if record.status in {"queued", "running"}:
+            raise ScopeError("A research document cannot be deleted while it is generating")
+        if not repository.delete_report(self.database_path, report_id):
+            raise AssistantNotFoundError(f"Collection report not found: {report_id}")
+        shutil.rmtree(self.data_dir / "collections" / "reports" / report_id, ignore_errors=True)
+        if record.run_id is not None:
+            shutil.rmtree(self.data_dir / "runs" / record.run_id, ignore_errors=True)
 
     def source_status(self, record: CollectionReportRecord) -> SourceStatus:
         if record.status != "completed":
@@ -569,6 +583,7 @@ class CollectionReportService:
                 self.database_path,
                 report_id=record.id,
                 run_id=run_id,
+                title=report.title,
                 version=REPORT_SCHEMA_VERSION,
                 source_fingerprint=record.source_fingerprint,
                 artifacts=tuple(writes),

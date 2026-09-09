@@ -225,11 +225,38 @@ def report_artifacts(
         return tuple(_artifact(row) for row in rows)
 
 
+def delete_report(database_path: Path, report_id: str) -> bool:
+    """Delete a terminal report and its artifact and generation records."""
+
+    with session_scope(database_path) as session:
+        report = session.get(CollectionReportRow, report_id)
+        if report is None:
+            return False
+        run_id = report.run_id
+        report.report_artifact_id = None
+        report.run_id = None
+        session.flush()
+        session.delete(report)
+        if run_id is not None:
+            artifacts = session.scalars(
+                select(CollectionArtifactRow).where(
+                    CollectionArtifactRow.generation_run_id == run_id
+                )
+            ).all()
+            for artifact in artifacts:
+                session.delete(artifact)
+            run = session.get(GenerationRunRow, run_id)
+            if run is not None:
+                session.delete(run)
+    return True
+
+
 def save_report_completion(
     database_path: Path,
     *,
     report_id: str,
     run_id: str,
+    title: str,
     version: str,
     source_fingerprint: str,
     artifacts: tuple[ArtifactWrite, ...],
@@ -256,6 +283,7 @@ def save_report_completion(
         ]
         session.add_all(rows)
         session.flush()
+        report.title = title
         report.status = "completed"
         report.completed_at = _now(session)
         report.report_artifact_id = next(
