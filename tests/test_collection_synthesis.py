@@ -20,10 +20,11 @@ class SynthesisProvider:
     provider_name = "fake"
     model = "fake-collection"
 
-    def __init__(self, *, bad_calls: int = 0) -> None:
+    def __init__(self, *, bad_calls: int = 0, truncated_calls: int = 0) -> None:
         self.prompts: list[str] = []
         self.max_tokens: list[int] = []
         self.bad_calls = bad_calls
+        self.truncated_calls = truncated_calls
 
     def generate(self, prompt: str, *, max_tokens: int) -> LlmResponse:
         self.prompts.append(prompt)
@@ -117,8 +118,17 @@ class SynthesisProvider:
                 "partial": False,
             },
         }
+        rendered = json.dumps(content)
+        if self.truncated_calls:
+            self.truncated_calls -= 1
+            return LlmResponse(
+                content=rendered[:-10],
+                input_tokens=100,
+                output_tokens=max_tokens,
+                finish_reason="length",
+            )
         return LlmResponse(
-            content=json.dumps(content), input_tokens=100, output_tokens=50, finish_reason="stop"
+            content=rendered, input_tokens=100, output_tokens=50, finish_reason="stop"
         )
 
 
@@ -376,3 +386,19 @@ def test_large_collection_uses_bounded_map_reduce_and_accounts_calls(tmp_path: P
         ]
     assert stages.count("map") >= 2
     assert stages[-1] == "reduce"
+
+
+def test_truncated_map_regenerates_without_embedding_candidate(tmp_path: Path) -> None:
+    database_path, _catalog, collection_id, _paper_ids = _environment(
+        tmp_path, papers=4, summary_size=8_000
+    )
+    provider = SynthesisProvider(truncated_calls=1)
+    service = _service(tmp_path, database_path, provider, context=12_000, input_limit=7_000)
+
+    result = service.synthesize(collection_id)
+
+    repair_prompt = provider.prompts[1]
+    assert result.strategy == "map_reduce"
+    assert "Regenerate a complete, concise synthesis" in repair_prompt
+    assert "CANDIDATE:" not in repair_prompt
+    assert "ORIGINAL INPUT:" in repair_prompt

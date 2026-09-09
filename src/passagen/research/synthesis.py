@@ -415,6 +415,18 @@ class CollectionSynthesisService:
                 f"{_INSTRUCTIONS}\nRepair the candidate for this validation error: {exc}\n"
                 f"SCHEMA:\n{_schema()}\nORIGINAL INPUT:\n{prompt}\nCANDIDATE:\n{response.content}"
             )
+            if response.finish_reason == "length" or not self._fits(
+                repair_prompt,
+                LlmPurpose.COLLECTION_REPAIR,
+                max_tokens,
+            ):
+                repair_prompt = (
+                    "Regenerate a complete, concise synthesis from ORIGINAL INPUT. The previous "
+                    f"response failed validation: {exc}\n"
+                    "Return only valid JSON within the output limit. Preserve every required "
+                    "paper role and citation, but omit optional detail before truncating.\n"
+                    f"ORIGINAL INPUT:\n{prompt}"
+                )
             repaired = self._call_llm(
                 run_id,
                 GenerationStage.REPAIR,
