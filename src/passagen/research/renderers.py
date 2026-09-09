@@ -18,7 +18,21 @@ def render_synthesis_json(synthesis: CollectionSynthesis) -> bytes:
 
 
 def render_synthesis_markdown(synthesis: CollectionSynthesis) -> str:
-    lines = ["# Collection Synthesis", "", synthesis.overview, "", "## Themes", ""]
+    lines = ["# Collection Intelligence", "", synthesis.executive_overview, ""]
+    lines.extend(["## Paper Roles", ""])
+    if synthesis.paper_roles:
+        for role in synthesis.paper_roles:
+            citations = " ".join(f"[{item}]" for item in role.citation_ids)
+            lines.append(f"### {role.paper_id}: {role.role}")
+            lines.append("")
+            lines.append(f"{role.contribution} {citations}".rstrip())
+            if role.method:
+                lines.append("")
+                lines.append(f"Method: {role.method}")
+            lines.append("")
+    else:
+        lines.extend(["Paper roles were not available in this synthesis version.", ""])
+    lines.extend(["## Themes", ""])
     if synthesis.themes:
         for theme in synthesis.themes:
             citations = " ".join(f"[{item}]" for item in theme.citation_ids)
@@ -44,6 +58,28 @@ def render_synthesis_markdown(synthesis: CollectionSynthesis) -> str:
         lines.append("")
     else:
         lines.extend(["No comparison dimensions were identified.", ""])
+    for heading, insights in (
+        ("Agreements", synthesis.agreements),
+        ("Disagreements", synthesis.disagreements),
+        ("Complementary Contributions", synthesis.complementary_contributions),
+        ("Research Gaps", synthesis.gaps),
+    ):
+        lines.extend([f"## {heading}", ""])
+        if insights:
+            for insight in insights:
+                references = " ".join(f"[{item}]" for item in insight.citation_ids)
+                lines.append(f"- **{insight.name}.** {insight.description} {references}".rstrip())
+        else:
+            lines.append(f"No {heading.lower()} were identified.")
+        lines.append("")
+    lines.extend(["## Open Questions", ""])
+    if synthesis.open_questions:
+        for question in synthesis.open_questions:
+            references = " ".join(f"[{item}]" for item in question.citation_ids)
+            lines.append(f"- **{question.question}** {question.rationale} {references}".rstrip())
+    else:
+        lines.append("No grounded follow-up questions were identified.")
+    lines.append("")
     lines.extend(["## Claims", ""])
     for claim in synthesis.claims:
         references = " ".join(f"[{item}]" for item in claim.citation_ids)

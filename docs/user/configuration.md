@@ -72,13 +72,24 @@ pipeline:
 
 assistant:
   rewrite_max_output_tokens: 1024
+  equivalence_max_output_tokens: 1024
+  max_qa_candidates: 3
+  qa_candidate_pool_size: 20
   answer_max_output_tokens: 8192
   truncated_response_max_attempts: 3
   max_history_messages: 10
   max_raw_sections: 3
+  collection_max_input_tokens: 64000
+  collection_map_max_output_tokens: 8000
+  collection_synthesis_max_output_tokens: 12000
+  collection_max_selected_papers: 4
+  report_max_output_tokens: 12000
+  report_validation_max_attempts: 2
   rewrite_prompt_path: null
+  equivalence_prompt_path: null
   answer_prompt_path: null
   repair_prompt_path: null
+  report_prompt_path: null
 ```
 
 `database_path: null` 使用 `<data-dir>/passagen.db`。`data_dir` 只由 CLI/Web 参数提供，不能
@@ -141,22 +152,33 @@ providers:
 ```
 
 可路由任务为 `abstract_cleanup`、`summary_evidence`、`summary_reduce`、
-`summary_synthesis`、`summary_repair`、`outline_synthesis`、`qa_rewrite`、`qa_answer` 和
-`qa_repair`。Profile 必须完整配置；`default` 是保留名称，不能出现在 `profiles` 中。
+`summary_synthesis`、`summary_repair`、`outline_synthesis`、`qa_rewrite`、`qa_equivalence`、
+`qa_answer`、`qa_repair`、`collection_synthesis`、`collection_map`、`collection_reduce`、
+`collection_repair`、`report_answer` 和 `report_repair`。Profile 必须完整配置；`default` 是保留
+名称，不能出现在 `profiles` 中。
 
 ## Assistant
 
-`assistant` 控制 Ask 的生成预算和上下文规模。`rewrite_max_output_tokens` 用于把追问改写为
-独立问题和检索词；`answer_max_output_tokens` 同时用于答案生成与引用修复。启用 reasoning 时，
-reasoning token 也会消耗这个输出预算。
+`assistant` 控制 Ask、Collection Synthesis 和 Research Document 的生成预算与上下文规模。
+`rewrite_max_output_tokens` 用于把追问改写为独立问题和检索词；
+`equivalence_max_output_tokens`、`max_qa_candidates` 和 `qa_candidate_pool_size` 控制历史答案语义
+复用；`answer_max_output_tokens` 同时用于答案生成与引用修复。启用 reasoning 时，reasoning
+token 也会消耗相应的输出预算。
 
 答案因长度截断且不符合 schema 时，Passagen 最多按
 `truncated_response_max_attempts` 重试，并逐次扩大输出预算。`max_history_messages` 限制送入
 rewrite 和 answer 上下文的最近消息数；设为 `0` 可禁用历史上下文。`max_raw_sections` 限制事实
 查询最多加载的原文章节数。
 
-三个 QA prompt path 为 `null` 时使用 Core 内置模板。相对路径与 pipeline prompt 一样，以
-配置文件所在目录为基准解析。
+`collection_max_input_tokens` 是应用层的 Collection 输入预算，不等于模型的
+`max_context_window`。`collection_map_max_output_tokens` 用于大型 Collection 的分批 map 输出，
+`collection_synthesis_max_output_tokens` 用于 direct/reduce 的最终结构化结果。
+`collection_max_selected_papers` 只限制 Collection Ask 每轮选择的相关 papers，不限制 Synthesis
+覆盖。`report_max_output_tokens` 包含结构化 JSON 的开销；`report_validation_max_attempts` 是报告
+Schema 或 citation 校验失败后的有界修复次数。
+
+QA 和 report prompt path 为 `null` 时使用 Core 内置模板。相对路径与 pipeline prompt 一样，
+以配置文件所在目录为基准解析。
 
 ## GROBID 和 PDF Parser
 

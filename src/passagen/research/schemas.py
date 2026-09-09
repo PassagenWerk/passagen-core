@@ -18,6 +18,34 @@ class SynthesisTheme(BaseModel):
     citation_ids: list[NonBlankStr] = Field(min_length=1)
 
 
+class SynthesisPaperRole(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: NonBlankStr
+    role: NonBlankStr
+    contribution: NonBlankStr
+    method: NonBlankStr | None = None
+    citation_ids: list[NonBlankStr] = Field(min_length=1)
+
+
+class SynthesisInsight(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: NonBlankStr
+    description: NonBlankStr
+    paper_ids: list[NonBlankStr] = Field(min_length=1)
+    citation_ids: list[NonBlankStr] = Field(min_length=1)
+
+
+class SynthesisOpenQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: NonBlankStr
+    rationale: NonBlankStr
+    paper_ids: list[NonBlankStr] = Field(min_length=1)
+    citation_ids: list[NonBlankStr] = Field(min_length=1)
+
+
 class ComparisonCell(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -77,12 +105,12 @@ class SynthesisCoverage(BaseModel):
         return self
 
 
-class CollectionSynthesis(BaseModel):
-    """Versioned, provider-independent collection synthesis artifact."""
+class CollectionSynthesisV1(BaseModel):
+    """Persisted v1 synthesis retained for library compatibility."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"] = COLLECTION_SYNTHESIS_SCHEMA_VERSION
+    schema_version: Literal["1"] = "1"
     overview: NonBlankStr
     themes: list[SynthesisTheme] = Field(default_factory=list)
     comparison_matrix: ComparisonMatrix = Field(default_factory=ComparisonMatrix)
@@ -110,6 +138,80 @@ class CollectionSynthesis(BaseModel):
         if missing:
             raise ValueError(f"synthesis references unknown citations: {', '.join(missing)}")
         return self
+
+
+class CollectionSynthesis(BaseModel):
+    """Current provider-independent collection intelligence artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["2"] = COLLECTION_SYNTHESIS_SCHEMA_VERSION
+    executive_overview: NonBlankStr
+    paper_roles: list[SynthesisPaperRole] = Field(default_factory=list)
+    themes: list[SynthesisTheme] = Field(default_factory=list)
+    comparison_matrix: ComparisonMatrix = Field(default_factory=ComparisonMatrix)
+    agreements: list[SynthesisInsight] = Field(default_factory=list)
+    disagreements: list[SynthesisInsight] = Field(default_factory=list)
+    complementary_contributions: list[SynthesisInsight] = Field(default_factory=list)
+    gaps: list[SynthesisInsight] = Field(default_factory=list)
+    open_questions: list[SynthesisOpenQuestion] = Field(default_factory=list)
+    claims: list[AnswerClaim] = Field(min_length=1)
+    citations: list[Citation] = Field(min_length=1)
+    coverage: SynthesisCoverage
+
+    @model_validator(mode="after")
+    def _references_resolve(self) -> Self:
+        citation_ids = [citation.citation_id for citation in self.citations]
+        if len(citation_ids) != len(set(citation_ids)):
+            raise ValueError("citation ids must be unique within a synthesis")
+        role_papers = [role.paper_id for role in self.paper_roles]
+        if len(role_papers) != len(set(role_papers)):
+            raise ValueError("paper roles must have unique paper ids")
+        known = set(citation_ids)
+        references = [citation_id for role in self.paper_roles for citation_id in role.citation_ids]
+        references.extend(
+            citation_id for theme in self.themes for citation_id in theme.citation_ids
+        )
+        references.extend(
+            citation_id
+            for row in self.comparison_matrix.rows
+            for cell in row.cells
+            for citation_id in cell.citation_ids
+        )
+        references.extend(
+            citation_id
+            for insights in (
+                self.agreements,
+                self.disagreements,
+                self.complementary_contributions,
+                self.gaps,
+            )
+            for insight in insights
+            for citation_id in insight.citation_ids
+        )
+        references.extend(
+            citation_id for question in self.open_questions for citation_id in question.citation_ids
+        )
+        references.extend(
+            citation_id for claim in self.claims for citation_id in claim.citation_ids
+        )
+        missing = sorted(set(references) - known)
+        if missing:
+            raise ValueError(f"synthesis references unknown citations: {', '.join(missing)}")
+        return self
+
+
+def upgrade_synthesis_v1(synthesis: CollectionSynthesisV1) -> CollectionSynthesis:
+    """Project a persisted v1 artifact into the current read model without inventing content."""
+
+    return CollectionSynthesis(
+        executive_overview=synthesis.overview,
+        themes=synthesis.themes,
+        comparison_matrix=synthesis.comparison_matrix,
+        claims=synthesis.claims,
+        citations=synthesis.citations,
+        coverage=synthesis.coverage,
+    )
 
 
 class CollectionArtifact(BaseModel):

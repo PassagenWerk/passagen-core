@@ -259,8 +259,17 @@ def _run_synthesis(env: CollectionEnv) -> None:
         ]
         return json.dumps(
             {
-                "schema_version": "1",
-                "overview": "The collection studies systems.",
+                "schema_version": "2",
+                "executive_overview": "The collection studies systems.",
+                "paper_roles": [
+                    {
+                        "paper_id": paper_id,
+                        "role": "Systems evidence",
+                        "contribution": "Contributes a systems result.",
+                        "citation_ids": [citations[index]["citation_id"]],
+                    }
+                    for index, paper_id in enumerate(env.paper_ids)
+                ],
                 "themes": [
                     {
                         "name": "Systems",

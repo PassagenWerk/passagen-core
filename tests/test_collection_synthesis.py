@@ -11,6 +11,7 @@ from passagen.catalog import CatalogService
 from passagen.config import AssistantSettings, LlmProfileSettings, LlmSettings
 from passagen.external.llm import LlmResponse
 from passagen.research import CollectionSynthesisService, render_synthesis_markdown
+from passagen.research.synthesis import read_synthesis_content
 from passagen.stages.summarization.schema import StructuredSummary
 from passagen.storage.database import connect_database, initialize_database
 
@@ -48,8 +49,18 @@ class SynthesisProvider:
             )
         by_paper = {citation["paper_id"]: citation["citation_id"] for citation in citation_models}
         content = {
-            "schema_version": "1",
-            "overview": "The collection studies related systems.",
+            "schema_version": "2",
+            "executive_overview": "The collection studies related systems.",
+            "paper_roles": [
+                {
+                    "paper_id": paper_id,
+                    "role": "Systems evidence",
+                    "contribution": "Contributes a systems result.",
+                    "method": "Evaluates a system.",
+                    "citation_ids": [by_paper[paper_id]],
+                }
+                for paper_id in paper_ids
+            ],
             "themes": [
                 {
                     "name": "Systems",
@@ -74,6 +85,25 @@ class SynthesisProvider:
                     for paper_id in paper_ids
                 ],
             },
+            "agreements": [],
+            "disagreements": [],
+            "complementary_contributions": [],
+            "gaps": [
+                {
+                    "name": "Broader evaluation",
+                    "description": "The supplied evaluation evidence is narrow.",
+                    "paper_ids": paper_ids,
+                    "citation_ids": list(by_paper.values()),
+                }
+            ],
+            "open_questions": [
+                {
+                    "question": "How do the systems compare under a shared workload?",
+                    "rationale": "The summaries report different evaluation targets.",
+                    "paper_ids": paper_ids,
+                    "citation_ids": list(by_paper.values()),
+                }
+            ],
             "claims": [
                 {
                     "text": "The collection contains systems research.",
@@ -232,9 +262,50 @@ def test_direct_synthesis_persists_immutable_bundle_reuses_and_forces(tmp_path: 
         path = tmp_path / artifact.path
         assert path.is_file()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == artifact.sha256
-    assert render_synthesis_markdown(generated.synthesis).startswith("# Collection Synthesis\n")
+    rendered = render_synthesis_markdown(generated.synthesis)
+    assert rendered.startswith("# Collection Intelligence\n")
+    assert "## Paper Roles" in rendered
+    assert "## Research Gaps" in rendered
+    assert "## Open Questions" in rendered
     with connect_database(database_path) as connection:
         assert connection.execute("SELECT count(*) FROM generation_llm_calls").fetchone()[0] == 2
+
+
+def test_persisted_v1_synthesis_is_projected_without_inventing_v2_content(
+    tmp_path: Path,
+) -> None:
+    database_path, _catalog, collection_id, _paper_ids = _environment(tmp_path)
+    generated = _service(tmp_path, database_path, SynthesisProvider()).synthesize(collection_id)
+    synthesis = generated.synthesis
+    payload = {
+        "schema_version": "1",
+        "overview": synthesis.executive_overview,
+        "themes": [theme.model_dump(mode="json") for theme in synthesis.themes],
+        "comparison_matrix": synthesis.comparison_matrix.model_dump(mode="json"),
+        "claims": [claim.model_dump(mode="json") for claim in synthesis.claims],
+        "citations": [citation.model_dump(mode="json") for citation in synthesis.citations],
+        "coverage": synthesis.coverage.model_dump(mode="json"),
+    }
+    content = (json.dumps(payload, indent=2) + "\n").encode()
+    artifacts = list(generated.artifacts)
+    index = next(index for index, item in enumerate(artifacts) if item.kind == "synthesis_json")
+    artifact = artifacts[index]
+    (tmp_path / artifact.path).write_bytes(content)
+    artifacts[index] = artifact.model_copy(
+        update={"sha256": hashlib.sha256(content).hexdigest(), "size_bytes": len(content)}
+    )
+
+    projected = read_synthesis_content(tmp_path, artifacts)
+
+    assert projected.schema_version == "2"
+    assert projected.executive_overview == synthesis.executive_overview
+    assert projected.themes == synthesis.themes
+    assert projected.paper_roles == []
+    assert projected.agreements == []
+    assert projected.disagreements == []
+    assert projected.complementary_contributions == []
+    assert projected.gaps == []
+    assert projected.open_questions == []
 
 
 def test_old_synthesis_becomes_stale_after_summary_change(tmp_path: Path) -> None:
@@ -287,7 +358,7 @@ def test_large_collection_uses_bounded_map_reduce_and_accounts_calls(tmp_path: P
         tmp_path, papers=4, summary_size=8_000
     )
     provider = SynthesisProvider()
-    service = _service(tmp_path, database_path, provider, context=12_000, input_limit=5_000)
+    service = _service(tmp_path, database_path, provider, context=12_000, input_limit=7_000)
 
     result = service.synthesize(collection_id)
 

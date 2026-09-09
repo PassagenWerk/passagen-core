@@ -4,7 +4,8 @@
 Core 垂直切片；Phase 2 已完成：单篇 Web 体验与结构化归档；Phase 3 已完成：FTS5、重复问题
 检测、复用与部分覆盖、force regenerate 和 stale；Phase 4 已完成：collection synthesis、
 comparison 与 CLI；Phase 5 已完成：collection conversation、两级检索、report、通用 queued
- dispatch、CLI 与 Web workspace）**
+dispatch、CLI 与 Web workspace；Phase 7 已规划：Collection 管理页、Research Desk、Synthesis v2
+与显式 LLM 配置）**
 
 本文档定义针对单篇 paper 和一组 paper（collection）的持久化对话问答、结构化问答归档、
 collection 总结与对比，以及按问题选择 summary、outline、raw context 和历史问答的能力。
@@ -910,3 +911,290 @@ prompt、检索或 stale 逻辑。
 - 自动根据模型输出修改 collection、paper metadata、note 或 tag。
 - 无 citation 的自由生成模式。
 - 多用户协作、远端同步、配额和计费系统。
+
+## 19. Phase 7：Collection Research Desk 与 Synthesis v2
+
+Phase 5 交付了完整能力，但当前 Web 将 Papers、Synthesis、Reports 和 Ask 作为四个平级 tab，
+同时在打开 collection paper 后隐藏成员列表并进入 focus reader。该结构把集合管理、阅读和研究
+生成混在同一页面，不能同时呈现 collection 成员、原始 paper 内容、跨论文综合结果和问答上下文。
+
+Phase 7 采用“管理页 + Research Desk”两个明确状态。先重构信息架构并复用现有 v1 contract，
+再升级 Core synthesis schema，避免 Web 与 Core 同时进行无边界改造。
+
+### 19.1 已选定的页面结构
+
+#### Collection 管理页
+
+路由保持：
+
+```text
+/collections/:collection-id
+```
+
+页面保持两栏：
+
+```text
+Collections index | Selected collection and ordered paper list
+```
+
+左栏只负责 collection 选择。右栏负责：
+
+- 展示 collection 名称、描述、paper 数量和 synthesis 新鲜度/覆盖状态。
+- 管理名称、描述、成员顺序、添加和移除 paper。
+- 展示每篇 paper 的 Summary、Outline 和 PDF 就绪状态。
+- 提供 `Open research desk`、`Add papers` 和次要操作菜单。
+- 移除 `Papers | Synthesis | Reports | Ask` 四个平级 tab。
+
+Paper 行采用以下交互：
+
+- 单击选中当前行并展示行级操作。
+- 双击进入该 paper 的 Collection Research Desk。
+- 同时提供可见的 `Open` 操作和 Enter 键支持，不能将双击作为唯一入口。
+
+#### Collection Research Desk
+
+沿用已有 paper 路由，并新增 collection 研究首页：
+
+```text
+/collections/:collection-id/research
+/collections/:collection-id/papers/:paper-id
+/collections/:collection-id/papers/:paper-id/pdf
+```
+
+Research Desk 仍为两栏，不显示 Collections index，也不增加 Library 的 Find 栏：
+
+```text
+Current collection paper list | Research canvas
+```
+
+左栏要求：
+
+- 显示 collection 名称、返回管理页入口和 research 首页入口。
+- 始终保留有序 paper 列表，当前 paper 使用与 Library Reader 一致的选中态。
+- 展示作者、年份、处理状态；Synthesis v2 可用时补充 paper role。
+- 支持 Previous/Next、`j/k` 和方向键导航。
+
+右侧 Research canvas 要求：
+
+- 在 research 首页展示 Collection intelligence。
+- 选择 paper 后复用现有 `PaperDetail`、Summary、Outline、Note 和 PDF。
+- 打开 paper 时不再隐藏左侧 collection paper 列表。
+- PDF 和 Ask 继续作为 canvas 内部 companion，不改变页面的两栏主结构。
+- Collection citation 跳转后必须保留 collection 上下文。
+- Ask 明确支持 `This paper` 和 `Whole collection` scope 切换。
+
+移动端允许将左侧 paper list 折叠为 drawer 或独立导航层，但路由、当前 paper 和 Ask scope 必须
+保持一致。
+
+### 19.2 Collection intelligence 信息架构
+
+Synthesis 不再作为孤立 tab，而是 Research Desk 首页的共享知识层。默认结构为：
+
+```text
+status and coverage
+executive overview
+paper roles
+themes
+comparison
+agreements and tensions
+gaps and next questions
+research documents
+```
+
+每个区块必须支持：
+
+- 跳转到相关 paper 的 Reader。
+- 通过 citation 打开 Summary evidence 或 PDF page。
+- 使用 `Ask about this` 将主题、comparison cell、gap 或 section 预填到 Ask。
+- 展示覆盖范围、缺少 Summary 的 papers 和 stale 原因。
+
+普通页面不展示 `direct`、`map_reduce`、`repair` 等实现术语；这些信息仅进入 run detail。
+
+生成入口使用 `Generate collection intelligence` 或 `Refresh`。`Allow partial coverage` 不作为常驻
+checkbox；只有输入不完整时才展示明确选择：
+
+```text
+Process missing papers
+Continue with N of M papers
+```
+
+### 19.3 Report 与 Ask 的重新定位
+
+Report 改称 Research document，不再作为顶层 tab。`New research document` 提供带说明的任务：
+
+```text
+Literature review
+Comparative analysis
+Research gaps
+Custom brief
+```
+
+生成结果进入 Collection intelligence 的 Research documents 区域。选择文档后在 Research canvas
+中打开，并提供 Regenerate、Ask about this、返回 Synthesis 和历史版本入口。
+
+Ask 不再占用顶层 tab，而是从 Research Desk header、Paper Reader、theme、comparison cell、gap
+和 report section 随时打开的 companion。Ask 必须显示当前 scope、实际选中的 papers 和来源类型；
+Synthesis 的 `open_questions` 可以直接预填为问题，但不能自动发起 LLM 调用。
+
+### 19.4 Synthesis Schema v2
+
+当前 v1 仅包含 overview、themes、comparison matrix、claims、citations 和 coverage，不足以支撑
+Research Desk。新生成的 v2 增加：
+
+```text
+executive_overview
+paper_roles
+themes
+comparison_matrix
+agreements
+disagreements
+complementary_contributions
+gaps
+open_questions
+claims
+citations
+coverage
+```
+
+`paper_roles`、themes、agreement/disagreement、gap 和 comparison cell 都必须引用本次 snapshot
+内的 summary artifact。`open_questions` 可以是未断言事实的研究建议，但如果问题前提包含事实，
+该前提仍需 citation。
+
+已有 v1 artifact 是持久化用户数据，因此升级必须保留兼容读取：
+
+- 保留明确的 v1 model，不原地放宽旧 schema。
+- 新生成内容写入 v2，并提升 prompt/schema version。
+- Core reader 接受 v1/v2，Web API 提供统一的展示 view model。
+- v1 映射中不存在的 v2 字段使用空集合，不伪造 LLM 内容。
+- Fingerprint 和复用策略必须区分 v1/v2，不能把 v1 当作新的 v2 结果复用。
+- CLI renderer 和 Web citation navigation 同时覆盖 v1/v2。
+
+Report 继续作为独立 artifact，但优先复用 fingerprint 匹配的 Synthesis v2，避免每种 report 从头
+重复发现 paper 之间的关系。
+
+### 19.5 LLM 调用策略
+
+Phase 7 保持本地内容与生成内容分层：
+
+1. 打开 Collection 时只读取数据库和 artifact 状态，不调用 LLM。
+2. Synthesis 仅在首次显式生成或用户执行 Refresh 时调用。
+3. Source fingerprint 和 schema version 均匹配时复用结果。
+4. Report 使用匹配的 synthesis 和必要的 paper summaries。
+5. Collection Ask 先用 synthesis/summary 选择相关 papers，再按问题需要读取有限 raw sections。
+6. 每个结果展示实际 papers、coverage、stale 状态；token 和阶段明细进入 run detail。
+
+大 collection 继续采用 bounded map/reduce，不拼接全部 raw text。后续只有在真实延迟与成本数据
+证明必要时，才增加按 paper 缓存 map artifact 的增量 synthesis。
+
+### 19.6 显式配置
+
+Collection 和 report 参数当前存在于 `AssistantSettings` 默认值，但没有完整出现在用户配置示例。
+配置模板和文档必须显式列出：
+
+```yaml
+assistant:
+  rewrite_max_output_tokens: 2048
+  equivalence_max_output_tokens: 1024
+  answer_max_output_tokens: 32768
+  truncated_response_max_attempts: 3
+
+  collection_max_input_tokens: 64000
+  collection_map_max_output_tokens: 8000
+  collection_synthesis_max_output_tokens: 12000
+  collection_max_selected_papers: 4
+
+  report_max_output_tokens: 12000
+  report_validation_max_attempts: 2
+
+  max_history_messages: 10
+  max_raw_sections: 3
+```
+
+文档必须说明：
+
+- `collection_max_input_tokens` 是应用层输入预算，不等于 provider context window。
+- `collection_max_selected_papers` 限制 Collection Ask 的候选 papers，不限制 Synthesis 覆盖。
+- `collection_map_max_output_tokens` 用于大 collection 的 map 阶段。
+- `collection_synthesis_max_output_tokens` 用于 direct/reduce 的结构化最终结果。
+- `report_max_output_tokens` 包含结构化 JSON 开销，不只是 Markdown 正文。
+- Reasoning token 可能计入 provider 输出上限，reasoning profile 需要为结构化答案预留空间。
+
+配置文档同时列出可路由的 task keys：
+
+```text
+collection_synthesis
+collection_map
+collection_reduce
+collection_repair
+report_answer
+report_repair
+qa_rewrite
+qa_equivalence
+qa_answer
+qa_repair
+```
+
+示例可以展示 `default`、`pro` 或 `reasoning` 的分工，但不能假定用户一定定义了这些 profile。
+
+### 19.7 实施批次
+
+#### Phase 7.1：管理页与 Reader 布局
+
+范围以 Web 为主：
+
+- 将 `/collections/:id` 收敛为两栏管理页。
+- 实现无 Find 栏的 Collection Research Desk。
+- 保留 paper list，复用 PaperDetail、PDF 和 Ask companion。
+- 增加双击、Open、键盘导航和移动端布局。
+- 先继续展示现有 Synthesis v1，避免阻塞 UI 重构。
+
+验收：从管理页打开任意 paper 后，paper list 与 Reader 同时可见；前后 paper 导航、PDF、Ask 和
+citation route 均保留 collection scope。
+
+#### Phase 7.2：统一研究工作区
+
+范围以 Web 为主：
+
+- 移除四个平级 workspace tab。
+- 建立 Collection intelligence 首页。
+- 将 Reports 改为 Research documents。
+- 将 Ask 改为随内容打开的 companion，并支持 paper/collection scope。
+- 增加 citation、suggested question 和 `Ask about this` 联动。
+
+验收：用户可以在同一 Research Desk 中从 synthesis 定位 paper evidence、打开 research document，
+并针对当前上下文继续提问，无需在多个互斥 tab 间来回切换。
+
+#### Phase 7.3：Synthesis v2
+
+范围覆盖 Core、Web 和 CLI：
+
+- 增加 v1/v2 schema、兼容 reader、prompt、renderer 和 API view。
+- 生成 paper roles、agreements、disagreements、gaps 和 open questions。
+- Report 和 Ask 消费 v2，同时保持 v1 persisted artifact 可读。
+- 增加 schema version、fingerprint、citation 和旧 artifact 回归测试。
+
+验收：v2 每个事实区块都能跳转到有效 evidence；已有 v1 library 无需重新生成即可打开，新调用
+不会错误复用 v1。
+
+#### Phase 7.4：配置与可观测性
+
+范围覆盖 Core 配置、CLI/Web 示例和文档：
+
+- 在 YAML 示例中显式加入 Collection/Report token 与 retry 参数。
+- 记录并文档化全部 task profile routing key。
+- 普通 UI 展示 coverage、实际 papers 和稳定错误。
+- Run detail 展示 model/profile、map/reduce/repair 阶段及 token usage。
+
+验收：用户可以只通过 `passagen.yaml` 调整 Collection Ask、Synthesis 和 Report 的模型路由及 token
+预算；配置加载测试验证文档中的完整示例。
+
+### 19.8 提交与测试边界
+
+实施保持小批次和仓库职责：
+
+- Core 先提交 versioned schema、兼容读取、prompt 和 service 测试。
+- Web 分别提交布局、Research Desk、Collection intelligence 和 companion 交互。
+- CLI 只适配新的统一 Core view/renderer，不实现独立转换规则。
+- 每个 Web 批次运行 frontend test、lint、build 和 packaged route E2E。
+- 每个 Core 批次运行 migration、artifact compatibility、citation、stale/reuse 和完整 pytest。
+- 不在 UI 重构提交中混入 Schema migration，不在 Core 提交中引入 Web 展示逻辑。
