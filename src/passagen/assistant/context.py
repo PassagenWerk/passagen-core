@@ -153,7 +153,8 @@ def _collection_synthesis_block(
         return None
     header = (
         "[source collection_synthesis "
-        f"artifact_id={artifact.artifact_id} artifact_sha256={artifact.sha256}]"
+        f"artifact_id={artifact.artifact_id} artifact_sha256={artifact.sha256} "
+        "citation_policy=embedded_paper_citations_only]"
     )
     return ContextBlock(ContextSource.COLLECTION_SUMMARY, header, content)
 

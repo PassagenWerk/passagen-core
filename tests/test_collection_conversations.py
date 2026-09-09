@@ -139,6 +139,10 @@ def test_collection_citation_outside_scope_is_repaired(tmp_path: Path) -> None:
     assert turn.answer_message.status is MessageStatus.COMPLETED
     stages = [call.stage for call in service.list_generation_llm_calls(turn.run_id)]
     assert stages == ["rewrite", "answer", "repair"]
+    assert (
+        "A collection_synthesis source is derived context and is not directly citable"
+        in provider.prompts[-1]
+    )
 
 
 def test_collection_citation_outside_scope_fails_after_one_repair(tmp_path: Path) -> None:
@@ -240,6 +244,10 @@ def test_collection_turn_uses_matching_synthesis(tmp_path: Path) -> None:
     assert snapshot.synthesis is not None
     answer_prompt = provider.prompts[-1]
     assert "[source collection_synthesis" in answer_prompt
+    assert "citation_policy=embedded_paper_citations_only" in answer_prompt
+    assert "A collection_synthesis source is derived context and is not directly citable" in (
+        answer_prompt
+    )
 
 
 def _run_synthesis(env: CollectionEnv) -> None:

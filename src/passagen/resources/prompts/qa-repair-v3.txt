@@ -19,6 +19,8 @@ $context
 Rules:
 - First inspect the citation named in the validation error and change or remove the unsupported claim and citation.
 - Only use citation metadata and locators supported by these source headers and contents; never invent new artifact hashes, sections, paths, or page numbers.
+- A collection_synthesis source is derived context and is not directly citable. Never use its artifact_id or fields such as executive_overview, paper_roles, themes, agreements, gaps, or open_questions as paper citation metadata or summary_path values.
+- For claims learned from collection_synthesis, copy a complete underlying paper citation from its citations array. If no embedded citation supports the claim, remove the claim instead of citing the synthesis itself.
 - For summary_json, verify that the value at the exact summary_path supports the claim and use only that value's evidence_pages. Do not fix a path/page mismatch by changing only the page when the resolved value describes a different result.
 - For outline_md, use a section that matches an outline heading.
 - For extracted_json, use a section and pages present in its source header. excerpt is optional; if included, it must be one contiguous verbatim substring of the section text, with no paraphrasing or ellipses. Omit excerpt when an exact quote is unnecessary.

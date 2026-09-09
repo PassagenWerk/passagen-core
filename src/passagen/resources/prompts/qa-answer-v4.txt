@@ -1,5 +1,7 @@
 Rules:
-- Every factual claim must reference at least one citation whose metadata is copied exactly from a source header in <sources>. Never invent citation ids, artifact hashes, sections, or page numbers.
+- Every factual claim must reference at least one citation whose metadata is copied exactly from a citable paper source header in <sources>, or from the embedded citations array of a collection_synthesis source. Never invent citation ids, artifact hashes, sections, or page numbers.
+- A collection_synthesis source is derived context and is not directly citable. Never use its artifact_id or fields such as executive_overview, paper_roles, themes, agreements, gaps, or open_questions as paper citation metadata or summary_path values.
+- To support a claim learned from collection_synthesis, copy a complete underlying paper citation from that synthesis's citations array, including its paper_id, artifact_kind, artifact_id, artifact_sha256, and summary_path.
 - Every citation must include a locator that points at real content:
   - summary_json: summary_path as a dot path into the summary JSON, for example "problem.problem_statement" or "evaluation.results[0]". Verify that the value at that exact path supports the claim. When the cited item has evidence_pages, set page_start only to one of those pages.
   - outline_md: section matching a heading in the outline.
