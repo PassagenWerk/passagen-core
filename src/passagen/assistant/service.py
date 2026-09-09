@@ -630,6 +630,11 @@ class ConversationService:
             prompt_overhead_tokens=prompt_overhead_tokens,
         )
         by_id = {paper.paper_id: paper for paper in collection.papers}
+        evidence_ids = (
+            list(summaries)
+            if ContextSource.COLLECTION_SUMMARY in plan.sources and synthesis_text is not None
+            else selected
+        )
         evidence = EvidenceIndex(
             papers=tuple(
                 PaperEvidenceIndex(
@@ -638,7 +643,7 @@ class ConversationService:
                     outline=None,
                     parsed=parsed.get(paper_id),
                 )
-                for paper_id in selected
+                for paper_id in evidence_ids
             )
         )
         return context, evidence

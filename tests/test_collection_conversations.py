@@ -250,6 +250,21 @@ def test_collection_turn_uses_matching_synthesis(tmp_path: Path) -> None:
     )
 
 
+def test_collection_turn_accepts_embedded_synthesis_citation_outside_retrieval(
+    tmp_path: Path,
+) -> None:
+    env = collection_env(tmp_path)
+    _run_synthesis(env)
+    provider = FakeProvider(collection_responder(env, citations=[summary_citation(env, "paper-b")]))
+    service = _service(env, provider, AssistantSettings(collection_max_selected_papers=1))
+    conversation = service.create_conversation(collection_id=env.collection_id)
+
+    turn = service.ask(conversation.id, "这些论文的延迟实验用了什么负载？")
+
+    assert turn.qa_record.context_plan.paper_ids == ["paper-a"]
+    assert turn.qa_record.answer.citations[0].paper_id == "paper-b"
+
+
 def _run_synthesis(env: CollectionEnv) -> None:
     from passagen.research import CollectionSynthesisService
 
