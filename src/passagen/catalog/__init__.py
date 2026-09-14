@@ -107,6 +107,7 @@ class PaperView:
     metadata_sources: dict[str, str]
     artifact_kinds: tuple[str, ...]
     tag_ids: tuple[str, ...]
+    collection_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,6 +615,7 @@ def _paper_views(session: Session, rows: list[PaperRow]) -> list[PaperView]:
     ids = [row.id for row in rows]
     artifact_map: dict[str, set[str]] = {paper_id: set() for paper_id in ids}
     tag_map: dict[str, list[str]] = {paper_id: [] for paper_id in ids}
+    collection_map: dict[str, list[str]] = {paper_id: [] for paper_id in ids}
     if ids:
         for paper_id, kind in session.execute(
             select(ArtifactRow.paper_id, ArtifactRow.kind).where(ArtifactRow.paper_id.in_(ids))
@@ -626,6 +628,12 @@ def _paper_views(session: Session, rows: list[PaperRow]) -> list[PaperView]:
             .order_by(TagRow.normalized_name, TagRow.id)
         ):
             tag_map[str(paper_id)].append(str(tag_id))
+        for paper_id, collection_id in session.execute(
+            select(CollectionPaperRow.paper_id, CollectionPaperRow.collection_id)
+            .where(CollectionPaperRow.paper_id.in_(ids))
+            .order_by(CollectionPaperRow.collection_id)
+        ):
+            collection_map[str(paper_id)].append(str(collection_id))
     return [
         PaperView(
             id=row.id,
@@ -646,6 +654,7 @@ def _paper_views(session: Session, rows: list[PaperRow]) -> list[PaperView]:
             },
             artifact_kinds=tuple(sorted(artifact_map[row.id])),
             tag_ids=tuple(tag_map[row.id]),
+            collection_ids=tuple(collection_map[row.id]),
         )
         for row in rows
     ]

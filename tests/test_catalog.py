@@ -166,6 +166,8 @@ def test_collection_membership_is_idempotent_and_reorders_atomically(tmp_path: P
     collection = catalog.create_collection("Reading list")
 
     catalog.add_collection_papers(collection.id, ["paper-0", "paper-1"])
+    assert catalog.get_paper("paper-0").collection_ids == (collection.id,)
+    assert catalog.get_paper("paper-2").collection_ids == ()
     unchanged = catalog.add_collection_papers(collection.id, ["paper-1"])
     assert [item.paper_id for item in unchanged.papers] == ["paper-0", "paper-1"]
 
