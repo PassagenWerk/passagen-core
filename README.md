@@ -8,6 +8,8 @@ Core 本身不提供命令行或 HTTP 服务。一般用户应选择以下入口
 
 - [Passagen CLI](https://github.com/PassagenWerk/passagen-cli)：导入和批量处理论文。
 - [Passagen Web](https://github.com/PassagenWerk/passagen-web)：通过浏览器管理和阅读论文库。
+- [Passagen MCP Server](https://github.com/PassagenWerk/passagen-mcp-server)：将已有论文、全文
+  evidence 和 collection intelligence 以只读 tools/resources 提供给 Agent。
 
 README 中的仓库链接指向 GitHub；在 GitLab 或 Gitea 镜像中，对应仓库位于同一 PassagenWerk 组的同名路径下。
 
@@ -66,6 +68,12 @@ docker compose up -d
 
 初始化 data directory、配置 API key、局域网 origin 和 volume 权限的完整步骤见
 [Passagen Web Docker 部署](https://github.com/PassagenWerk/passagen-web/blob/main/docs/user/docker.md)。
+
+Passagen MCP Server 同样复用 Core，但作为独立 companion image/process 发布，而不合并到 Web
+运行镜像。它与 Web/CLI 共享兼容的 data directory 和 Core schema，通过只读 MCP 接口让
+Passagen 被 LibreChat、Claude Desktop、Cursor、VS Code/Copilot、自定义 research agent 和
+其他兼容 MCP 的 Agent Host 调用，并嵌入 planner/retriever 等多工具工作流。部署方式见
+[Passagen MCP Server](https://github.com/PassagenWerk/passagen-mcp-server)。
 
 ## 配置
 
