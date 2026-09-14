@@ -2,6 +2,14 @@
 
 All notable changes to Passagen Core are documented in this file.
 
+## [0.7.1] - 2026-09-14
+
+### Added
+
+- Exposed each paper's collection memberships through `PaperView` so compatible clients can show
+  existing organization state without additional per-collection queries.
+- Documented the read-only Passagen MCP Server as an Agent integration entry point.
+
 ## [0.7.0] - 2026-09-10
 
 ### Added
