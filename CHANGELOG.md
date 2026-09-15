@@ -10,6 +10,8 @@ All notable changes to Passagen Core are documented in this file.
   cascades relational data, and removes managed PDF and generated artifact files transactionally.
 - Added BibTeX citation retrieval through DOI content negotiation with deterministic local and
   arXiv-aware fallback generation.
+- Improved locally generated BibTeX keys with readable title terms, normalized stable identifiers,
+  bounded length, and automatic digest expansion on catalog collisions.
 
 ## [0.7.1] - 2026-09-14
 
