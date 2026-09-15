@@ -17,6 +17,7 @@ README 中的仓库链接指向 GitHub；在 GitLab 或 Gitea 镜像中，对应
 
 - 按 SHA-256 导入和去重 PDF。
 - 从 PDF、Crossref、arXiv 和 GROBID 合并论文元数据。
+- 通过 DOI 获取权威 BibTeX，并在远端不可用时根据本地元数据生成降级引用。
 - 使用 GROBID 或 PyMuPDF 提取统一全文结构。
 - 保留 Author Abstract 原文，并生成经过校验的 LLM-assisted cleaned view。
 - 生成结构化英文 Summary 和技术 Outline。

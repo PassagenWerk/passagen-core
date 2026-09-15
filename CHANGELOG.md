@@ -8,6 +8,8 @@ All notable changes to Passagen Core are documented in this file.
 
 - Added coordinated paper deletion that rejects active work, compacts collection membership,
   cascades relational data, and removes managed PDF and generated artifact files transactionally.
+- Added BibTeX citation retrieval through DOI content negotiation with deterministic local and
+  arXiv-aware fallback generation.
 
 ## [0.7.1] - 2026-09-14
 
