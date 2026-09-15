@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import unicodedata
 import uuid
 from collections.abc import Sequence
@@ -24,9 +26,15 @@ from passagen.storage.models import (
     ArtifactRow,
     CollectionPaperRow,
     CollectionRow,
+    ConversationMessageRow,
+    GenerationRunRow,
     PaperRow,
     PaperTagRow,
+    ProcessingRunRow,
+    QaCitationRow,
+    QaRecordRow,
     TagRow,
+    UpdateRunRow,
 )
 
 
@@ -214,6 +222,147 @@ class CatalogService:
                 return _paper_views(session, [row])[0]
         except OperationalError as exc:
             raise _operational_error(exc) from exc
+
+    def delete_paper(self, paper_id: str) -> None:
+        trash_dir = self.data_dir / ".trash" / f"paper-{uuid.uuid4()}"
+        staged: list[tuple[Path, Path]] = []
+        try:
+            with session_scope(self.database_path) as session:
+                paper = _required(session, PaperRow, paper_id, "Paper")
+                memberships = list(
+                    session.scalars(
+                        select(CollectionPaperRow).where(CollectionPaperRow.paper_id == paper_id)
+                    )
+                )
+                collection_ids = [item.collection_id for item in memberships]
+                self._ensure_paper_is_idle(session, paper_id, collection_ids)
+                targets = self._paper_delete_targets(session, paper_id)
+                for collection_id in collection_ids:
+                    self._remove_paper_from_collection(session, collection_id, paper_id)
+                self._remove_collection_answers_citing_paper(session, paper_id)
+                session.delete(paper)
+                session.flush()
+                for source in targets:
+                    if not source.exists():
+                        continue
+                    relative = source.relative_to(self.data_dir)
+                    destination = trash_dir / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source, destination)
+                    staged.append((source, destination))
+        except OperationalError as exc:
+            _restore_staged_files(staged)
+            shutil.rmtree(trash_dir, ignore_errors=True)
+            raise _operational_error(exc) from exc
+        except OSError as exc:
+            _restore_staged_files(staged)
+            shutil.rmtree(trash_dir, ignore_errors=True)
+            raise CatalogError("Managed paper files could not be removed") from exc
+        except Exception:
+            _restore_staged_files(staged)
+            shutil.rmtree(trash_dir, ignore_errors=True)
+            raise
+        shutil.rmtree(trash_dir, ignore_errors=True)
+
+    def _ensure_paper_is_idle(
+        self, session: Session, paper_id: str, collection_ids: Sequence[str]
+    ) -> None:
+        active_updates = session.scalars(
+            select(UpdateRunRow).where(UpdateRunRow.status.in_(("queued", "running")))
+        )
+        if any(paper_id in _json_list(run.paper_ids_json) for run in active_updates):
+            raise CatalogConflictError("Paper is part of an active processing run")
+        active_stage = session.scalar(
+            select(ProcessingRunRow.id).where(
+                ProcessingRunRow.paper_id == paper_id,
+                ProcessingRunRow.status == "running",
+            )
+        )
+        if active_stage is not None:
+            raise CatalogConflictError("Paper is part of an active processing run")
+        generation_scope = GenerationRunRow.paper_id == paper_id
+        if collection_ids:
+            generation_scope = generation_scope | GenerationRunRow.collection_id.in_(collection_ids)
+        active_generation = session.scalar(
+            select(GenerationRunRow.id).where(
+                GenerationRunRow.status.in_(("queued", "running")), generation_scope
+            )
+        )
+        if active_generation is not None:
+            raise CatalogConflictError("Paper is part of an active generation run")
+
+    def _paper_delete_targets(self, session: Session, paper_id: str) -> tuple[Path, ...]:
+        paths = [
+            _managed_path(self.data_dir, row.path)
+            for row in session.scalars(select(ArtifactRow).where(ArtifactRow.paper_id == paper_id))
+        ]
+        paper_dir = _managed_path(self.data_dir, (Path("papers") / paper_id).as_posix())
+        paths.append(paper_dir)
+        unique = sorted(set(paths), key=lambda path: len(path.parts))
+        targets = tuple(
+            path
+            for index, path in enumerate(unique)
+            if not any(path.is_relative_to(parent) for parent in unique[:index])
+        )
+        other_paths = [
+            _managed_path(self.data_dir, row.path)
+            for row in session.scalars(select(ArtifactRow).where(ArtifactRow.paper_id != paper_id))
+        ]
+        if any(other.is_relative_to(target) for target in targets for other in other_paths):
+            raise InvalidArtifactError("Paper files overlap artifacts owned by another paper")
+        return targets
+
+    @staticmethod
+    def _remove_paper_from_collection(session: Session, collection_id: str, paper_id: str) -> None:
+        collection = _required(session, CollectionRow, collection_id, "Collection")
+        remaining = list(
+            session.scalars(
+                select(CollectionPaperRow)
+                .where(
+                    CollectionPaperRow.collection_id == collection_id,
+                    CollectionPaperRow.paper_id != paper_id,
+                )
+                .order_by(CollectionPaperRow.position)
+            )
+        )
+        session.execute(
+            delete(CollectionPaperRow).where(CollectionPaperRow.collection_id == collection_id)
+        )
+        session.flush()
+        session.add_all(
+            CollectionPaperRow(
+                collection_id=collection_id,
+                paper_id=item.paper_id,
+                position=position,
+                note=item.note,
+                added_at=item.added_at,
+            )
+            for position, item in enumerate(remaining)
+        )
+        collection.updated_at = str(
+            session.scalar(select(func.strftime("%Y-%m-%d %H:%M:%f", "now")))
+        )
+
+    @staticmethod
+    def _remove_collection_answers_citing_paper(session: Session, paper_id: str) -> None:
+        message_ids = set(
+            session.scalars(
+                select(QaRecordRow.question_message_id)
+                .join(QaCitationRow, QaCitationRow.qa_record_id == QaRecordRow.id)
+                .where(QaCitationRow.paper_id == paper_id)
+            )
+        )
+        message_ids.update(
+            session.scalars(
+                select(QaRecordRow.answer_message_id)
+                .join(QaCitationRow, QaCitationRow.qa_record_id == QaRecordRow.id)
+                .where(QaCitationRow.paper_id == paper_id)
+            )
+        )
+        if message_ids:
+            session.execute(
+                delete(ConversationMessageRow).where(ConversationMessageRow.id.in_(message_ids))
+            )
 
     def update_user_metadata(
         self,
@@ -691,6 +840,34 @@ def _required_name(value: str, label: str) -> str:
     if not cleaned:
         raise CatalogValidationError(f"{label} must not be blank")
     return cleaned
+
+
+def _managed_path(data_dir: Path, value: str) -> Path:
+    relative = Path(value)
+    if relative.is_absolute():
+        raise InvalidArtifactError("Artifact path must be relative")
+    candidate = data_dir / relative
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(data_dir):
+        raise InvalidArtifactError("Artifact path escapes the data directory")
+    current = candidate
+    while current != data_dir:
+        if current.is_symlink():
+            raise InvalidArtifactError("Artifact path must not traverse symbolic links")
+        current = current.parent
+    return resolved
+
+
+def _restore_staged_files(staged: Sequence[tuple[Path, Path]]) -> None:
+    failures: list[OSError] = []
+    for source, destination in reversed(staged):
+        try:
+            source.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(destination, source)
+        except OSError as exc:
+            failures.append(exc)
+    if failures:
+        raise CatalogError("Paper deletion failed and managed files could not be restored")
 
 
 def _tag_names(name: str) -> tuple[str, str]:

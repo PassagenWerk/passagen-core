@@ -2,6 +2,13 @@
 
 All notable changes to Passagen Core are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added coordinated paper deletion that rejects active work, compacts collection membership,
+  cascades relational data, and removes managed PDF and generated artifact files transactionally.
+
 ## [0.7.1] - 2026-09-14
 
 ### Added

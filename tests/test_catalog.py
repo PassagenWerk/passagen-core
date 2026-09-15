@@ -222,17 +222,131 @@ def test_removing_membership_compacts_positions_without_deleting_paper(tmp_path:
     assert catalog.get_paper("paper-1").id == "paper-1"
 
 
-def test_paper_delete_cascades_organization_records(tmp_path: Path) -> None:
+def test_delete_paper_removes_files_and_compacts_collection(tmp_path: Path) -> None:
     catalog, database_path = _library(tmp_path)
     tag = catalog.create_tag("Keep")
     collection = catalog.create_collection("Queue")
-    catalog.set_paper_tags("paper-0", [tag.id])
-    catalog.add_collection_papers(collection.id, ["paper-0"])
+    catalog.set_paper_tags("paper-1", [tag.id])
+    catalog.add_collection_papers(collection.id, ["paper-0", "paper-1", "paper-2"])
+    pdf = tmp_path / "pdfs" / "11" / "paper-1.pdf"
+    generated = tmp_path / "papers" / "paper-1" / "summary.json"
+    pdf.parent.mkdir(parents=True)
+    generated.parent.mkdir(parents=True)
+    pdf.write_bytes(b"pdf")
+    generated.write_bytes(b"summary")
+    with connect_database(database_path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO artifacts (id, paper_id, kind, path, size_bytes)
+            VALUES (?, 'paper-1', ?, ?, ?)
+            """,
+            (
+                ("pdf", "original_pdf", "pdfs/11/paper-1.pdf", 3),
+                ("summary", "summary_json", "papers/paper-1/summary.json", 7),
+            ),
+        )
+
+    catalog.delete_paper("paper-1")
 
     with connect_database(database_path) as connection:
-        connection.execute("DELETE FROM papers WHERE id = ?", ("paper-0",))
+        paper_count = connection.execute(
+            "SELECT COUNT(*) FROM papers WHERE id = 'paper-1'"
+        ).fetchone()[0]
+        assert paper_count == 0
         assert connection.execute("SELECT COUNT(*) FROM paper_tags").fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM collection_papers").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+    memberships = catalog.get_collection(collection.id).papers
+    assert [(item.paper_id, item.position) for item in memberships] == [
+        ("paper-0", 0),
+        ("paper-2", 1),
+    ]
+    assert not pdf.exists()
+    assert not generated.parent.exists()
+
+
+def test_delete_paper_rejects_active_processing_run(tmp_path: Path) -> None:
+    catalog, database_path = _library(tmp_path)
+    with connect_database(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO update_runs (id, paper_ids_json, mode, status)
+            VALUES ('run-1', '["paper-0"]', 'continue', 'running')
+            """
+        )
+
+    with pytest.raises(CatalogConflictError, match="active processing"):
+        catalog.delete_paper("paper-0")
+
+    assert catalog.get_paper("paper-0").id == "paper-0"
+
+
+def test_delete_paper_rejects_unsafe_artifact_without_changing_catalog(tmp_path: Path) -> None:
+    catalog, database_path = _library(tmp_path)
+    collection = catalog.create_collection("Queue")
+    catalog.add_collection_papers(collection.id, ["paper-0", "paper-1"])
+    with connect_database(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO artifacts (id, paper_id, kind, path)
+            VALUES ('escape', 'paper-0', 'original_pdf', '../outside.pdf')
+            """
+        )
+
+    with pytest.raises(InvalidArtifactError, match="escapes"):
+        catalog.delete_paper("paper-0")
+
+    assert catalog.get_paper("paper-0").id == "paper-0"
+    assert [item.paper_id for item in catalog.get_collection(collection.id).papers] == [
+        "paper-0",
+        "paper-1",
+    ]
+
+
+def test_delete_paper_removes_collection_answers_that_cite_it(tmp_path: Path) -> None:
+    catalog, database_path = _library(tmp_path)
+    collection = catalog.create_collection("Queue")
+    catalog.add_collection_papers(collection.id, ["paper-0", "paper-1"])
+    with connect_database(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO conversations (id, collection_id, title)
+            VALUES ('conversation-1', ?, 'Question')
+            """,
+            (collection.id,),
+        )
+        connection.executemany(
+            """
+            INSERT INTO conversation_messages (id, conversation_id, role, content, status)
+            VALUES (?, 'conversation-1', ?, 'content', 'completed')
+            """,
+            (("question-1", "user"), ("answer-1", "assistant")),
+        )
+        connection.execute(
+            """
+            INSERT INTO qa_records
+                (id, conversation_id, question_message_id, answer_message_id,
+                 standalone_question, normalized_question, normalized_question_hash, intent,
+                 context_plan_json, answer_json, source_snapshot_json, source_fingerprint,
+                 prompt_version, answer_schema_version)
+            VALUES
+                ('qa-1', 'conversation-1', 'question-1', 'answer-1', 'Question?', 'question?',
+                 'hash', 'lookup', '{}', '{}', '{}', 'fingerprint', '1', '1')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO qa_citations
+                (id, qa_record_id, paper_id, artifact_kind, artifact_sha256)
+            VALUES ('citation-1', 'qa-1', 'paper-0', 'summary_json', 'sha')
+            """
+        )
+
+    catalog.delete_paper("paper-0")
+
+    with connect_database(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM qa_records").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM conversation_messages").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 1
 
 
 def test_user_metadata_survives_pipeline_refresh(tmp_path: Path) -> None:
