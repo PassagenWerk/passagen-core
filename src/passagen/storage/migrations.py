@@ -8,15 +8,32 @@ from sqlalchemy import Connection, inspect
 
 from passagen.storage.engine import database_engine
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _BASELINE_REVISION = "0001"
-_LEGACY_REVISIONS = {1: _BASELINE_REVISION, 6: "0006", 7: "0007", 8: "0008", 9: "0009"}
+_LEGACY_REVISIONS = {
+    1: _BASELINE_REVISION,
+    6: "0006",
+    7: "0007",
+    8: "0008",
+    9: "0009",
+    10: "0010",
+}
 _APPLICATION_TABLES = {"papers", "artifacts", "processing_runs", "llm_calls"}
 _REQUIRED_COLUMNS = {
     "papers": {"id", "original_filename", "pdf_sha256", "status"},
     "artifacts": {"id", "paper_id", "kind", "path"},
     "processing_runs": {"id", "paper_id", "stage", "status"},
     "llm_calls": {"id", "processing_run_id", "provider", "model"},
+}
+_SCHEMA_11_CITATION_COLUMNS = {
+    "paper_id",
+    "format",
+    "content",
+    "citation_key",
+    "source",
+    "metadata_fingerprint",
+    "generator_version",
+    "remote_status",
 }
 
 
@@ -45,7 +62,7 @@ def initialize_schema(database_path: Path) -> None:
             and not has_alembic
             and user_version in {*_LEGACY_REVISIONS, SCHEMA_VERSION}
         ):
-            _validate_legacy_schema(connection)
+            _validate_legacy_schema(connection, user_version)
             command.stamp(config, _LEGACY_REVISIONS.get(user_version, head_revision()))
             command.upgrade(config, "head")
         elif has_alembic:
@@ -75,12 +92,20 @@ def head_revision() -> str:
     return str(ScriptDirectory.from_config(_config()).get_current_head())
 
 
-def _validate_legacy_schema(connection: Connection) -> None:
+def _validate_legacy_schema(connection: Connection, user_version: int) -> None:
     inspector = inspect(connection)
     for table, required in _REQUIRED_COLUMNS.items():
         columns = {str(column["name"]) for column in inspector.get_columns(table)}
         if not required <= columns:
             raise SchemaVersionError(f"Legacy table {table} is missing required columns")
+    if user_version >= 11:
+        if not inspector.has_table("paper_citations"):
+            raise SchemaVersionError("Legacy table paper_citations is missing required columns")
+        citation_columns = {
+            str(column["name"]) for column in inspector.get_columns("paper_citations")
+        }
+        if not citation_columns >= _SCHEMA_11_CITATION_COLUMNS:
+            raise SchemaVersionError("Legacy table paper_citations is missing required columns")
     quick_check = connection.exec_driver_sql("PRAGMA quick_check").scalar_one()
     foreign_key_issues = connection.exec_driver_sql("PRAGMA foreign_key_check").first()
     connection.commit()

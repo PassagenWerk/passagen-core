@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -31,9 +32,11 @@ class _DoiLookup:
     def __init__(self, result: str | None = None, error: str | None = None) -> None:
         self.result = result
         self.error = error
+        self.calls = 0
 
     def lookup(self, doi: str) -> str | None:
         del doi
+        self.calls += 1
         if self.error is not None:
             raise CitationLookupError(self.error)
         return self.result
@@ -59,6 +62,25 @@ def test_retrieves_authoritative_bibtex_through_doi_content_negotiation(tmp_path
     assert result.authoritative is True
     assert result.content == "@article{author2025, title={A Paper}}\n"
     assert result.warnings == ()
+    assert result.cached is False
+    assert result.updated_at is not None
+    assert result.remote_checked_at is not None
+
+
+def test_authoritative_citation_is_read_from_persistent_cache(tmp_path: Path) -> None:
+    database_path, paper_id = _paper(
+        tmp_path,
+        BibliographicMetadata(title="A Paper", doi="10.1000/cached"),
+    )
+    first_lookup = _DoiLookup("@article{cached2025, title={A Paper}}\n")
+    first = CitationService(database_path, doi_lookup=first_lookup).get_bibtex(paper_id)
+    unavailable_lookup = _DoiLookup(error="offline")
+
+    second = CitationService(database_path, doi_lookup=unavailable_lookup).get_bibtex(paper_id)
+
+    assert first.content == second.content
+    assert second.cached is True
+    assert unavailable_lookup.calls == 0
 
 
 def test_doi_failure_falls_back_to_escaped_local_metadata(tmp_path: Path) -> None:
@@ -84,6 +106,62 @@ def test_doi_failure_falls_back_to_escaped_local_metadata(tmp_path: Path) -> Non
     assert "title = {Fast \\& Safe\\_Systems}" in result.content
     assert "doi = {10.1000/fallback}" in result.content
     assert result.warnings and "DOI BibTeX lookup failed" in result.warnings[0]
+
+
+def test_failed_doi_cache_waits_until_retry_is_due(tmp_path: Path) -> None:
+    database_path, paper_id = _paper(
+        tmp_path,
+        BibliographicMetadata(title="Fallback", doi="10.1000/retry"),
+    )
+    current = [datetime(2026, 9, 15, tzinfo=UTC)]
+    lookup = _DoiLookup(error="offline")
+    service = CitationService(database_path, doi_lookup=lookup, now=lambda: current[0])
+
+    first = service.get_bibtex(paper_id)
+    second = service.get_bibtex(paper_id)
+    current[0] += timedelta(days=2)
+    third = service.get_bibtex(paper_id)
+
+    assert first.cached is False
+    assert second.cached is True
+    assert third.cached is False
+    assert lookup.calls == 2
+
+
+def test_failed_refresh_preserves_authoritative_content(tmp_path: Path) -> None:
+    database_path, paper_id = _paper(
+        tmp_path,
+        BibliographicMetadata(title="A Paper", doi="10.1000/refresh"),
+    )
+    lookup = _DoiLookup("@article{saved2025, title={Saved}}\n")
+    service = CitationService(database_path, doi_lookup=lookup)
+    original = service.get_bibtex(paper_id)
+    lookup.result = None
+    lookup.error = "offline"
+
+    refreshed = service.get_bibtex(paper_id, refresh=True)
+
+    assert refreshed.content == original.content
+    assert refreshed.source is CitationSource.DOI
+    assert refreshed.authoritative is True
+    assert refreshed.cached is True
+    assert refreshed.warnings and "offline" in refreshed.warnings[0]
+
+
+def test_invalid_doi_bibtex_is_not_persisted_as_authoritative(tmp_path: Path) -> None:
+    database_path, paper_id = _paper(
+        tmp_path,
+        BibliographicMetadata(title="A Paper", doi="10.1000/invalid"),
+    )
+
+    result = CitationService(
+        database_path,
+        doi_lookup=_DoiLookup("@article{missing-delimiter}"),
+    ).get_bibtex(paper_id)
+
+    assert result.source is CitationSource.LOCAL
+    assert result.authoritative is False
+    assert result.warnings and "valid BibTeX key" in result.warnings[0]
 
 
 def test_arxiv_metadata_generates_an_authoritative_local_entry(tmp_path: Path) -> None:
@@ -142,6 +220,31 @@ def test_local_keys_are_stable_and_distinguish_similar_papers(tmp_path: Path) ->
     assert second_key.startswith("author2025theorysystemsextended-")
     assert first_key != second_key
     assert _citation_key(service.get_bibtex(paper_ids[0]).content) == first_key
+
+
+def test_metadata_change_rebuilds_local_content_but_preserves_key(tmp_path: Path) -> None:
+    database_path, paper_id = _paper(
+        tmp_path,
+        BibliographicMetadata(title="Original Title", authors=("Ada Author",), year=2025),
+    )
+    service = CitationService(database_path)
+    original = service.get_bibtex(paper_id)
+    cached = service.get_bibtex(paper_id)
+    record = get_paper(database_path, paper_id)
+    assert record is not None
+    update_paper_metadata(
+        database_path,
+        paper_id,
+        BibliographicMetadata(title="Corrected Title", authors=("Ada Author",), year=2025),
+        status=record.status,
+    )
+
+    rebuilt = service.get_bibtex(paper_id)
+
+    assert cached.cached is True
+    assert rebuilt.cached is False
+    assert "title = {Corrected Title}" in rebuilt.content
+    assert _citation_key(rebuilt.content) == _citation_key(original.content)
 
 
 def test_normalized_duplicate_identifiers_are_disambiguated(tmp_path: Path) -> None:

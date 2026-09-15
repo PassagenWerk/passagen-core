@@ -12,6 +12,12 @@ All notable changes to Passagen Core are documented in this file.
   arXiv-aware fallback generation.
 - Improved locally generated BibTeX keys with readable title terms, normalized stable identifiers,
   bounded length, and automatic digest expansion on catalog collisions.
+- Persisted current paper citations with metadata-aware invalidation, DOI retry backoff, explicit
+  refresh support, and retention of previously authoritative content when refresh fails.
+
+### Changed
+
+- Advanced Passagen Schema to version 11 with lazily populated paper citation records.
 
 ## [0.7.1] - 2026-09-14
 

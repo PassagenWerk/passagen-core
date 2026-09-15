@@ -72,6 +72,47 @@ class ArtifactRow(Base):
     paper: Mapped[PaperRow] = relationship(back_populates="artifacts")
 
 
+class PaperCitationRow(Base):
+    __tablename__ = "paper_citations"
+    __table_args__ = (
+        CheckConstraint("format IN ('bibtex')"),
+        CheckConstraint("source IN ('doi', 'arxiv', 'local_metadata')"),
+        CheckConstraint("authoritative IN (0, 1)"),
+        CheckConstraint("remote_status IN ('success', 'not_found', 'failed', 'not_attempted')"),
+        CheckConstraint("length(content) <= 1000000"),
+        Index("ix_paper_citations_source_identifier", "source_identifier"),
+        Index(
+            "ux_paper_citations_local_key",
+            "format",
+            "citation_key",
+            unique=True,
+            sqlite_where=text("source IN ('arxiv', 'local_metadata')"),
+        ),
+    )
+
+    paper_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    format: Mapped[str] = mapped_column(Text, primary_key=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citation_key: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    authoritative: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_identifier: Mapped[str | None] = mapped_column(Text)
+    metadata_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    generator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    remote_status: Mapped[str] = mapped_column(Text, nullable=False)
+    remote_checked_at: Mapped[str | None] = mapped_column(Text)
+    next_remote_attempt_at: Mapped[str | None] = mapped_column(Text)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class PaperSectionRow(Base):
     __tablename__ = "paper_sections"
     __table_args__ = (

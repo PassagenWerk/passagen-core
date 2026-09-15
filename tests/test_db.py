@@ -54,6 +54,7 @@ def test_initialize_database_creates_current_schema(tmp_path: Path) -> None:
         "paper_tags",
         "collections",
         "collection_papers",
+        "paper_citations",
     } <= tables
     assert "metadata_sources_json" in paper_columns
     assert "abstract" in paper_columns
@@ -79,6 +80,28 @@ def test_initialize_database_stamps_existing_v1_without_losing_data(tmp_path: Pa
     assert alembic_revision(database_path) == head_revision()
 
 
+def test_initialize_database_migrates_schema_10_to_persisted_citations(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    initialize_database(database_path)
+    with connect_database(database_path) as connection:
+        insert_paper(connection, "paper-1", "a" * 64)
+        connection.execute("DROP TABLE paper_citations")
+        connection.execute("UPDATE alembic_version SET version_num = '0010'")
+        connection.execute("PRAGMA user_version = 10")
+
+    initialize_database(database_path)
+
+    with connect_database(database_path) as connection:
+        paper = connection.execute("SELECT id FROM papers WHERE id = 'paper-1'").fetchone()
+        citation_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'paper_citations'"
+        ).fetchone()
+    assert paper is not None
+    assert citation_table is not None
+    assert current_version(database_path) == 11
+    assert alembic_revision(database_path) == "0011"
+
+
 def test_initialize_database_rejects_unversioned_existing_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "passagen.db"
     initialize_database(database_path)
@@ -87,6 +110,17 @@ def test_initialize_database_rejects_unversioned_existing_schema(tmp_path: Path)
         connection.execute("PRAGMA user_version = 0")
 
     with pytest.raises(DatabaseVersionError, match="incomplete or unsupported"):
+        initialize_database(database_path)
+
+
+def test_initialize_database_rejects_schema_11_without_citation_table(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    initialize_database(database_path)
+    with connect_database(database_path) as connection:
+        connection.execute("DROP TABLE paper_citations")
+        connection.execute("DROP TABLE alembic_version")
+
+    with pytest.raises(DatabaseVersionError, match="paper_citations"):
         initialize_database(database_path)
 
 
@@ -142,6 +176,28 @@ def test_foreign_keys_are_enabled(tmp_path: Path) -> None:
             "INSERT INTO artifacts (id, paper_id, kind, path) VALUES (?, ?, ?, ?)",
             ("artifact-1", "missing-paper", "pdf", "/paper.pdf"),
         )
+
+
+def test_paper_deletion_cascades_to_persisted_citations(tmp_path: Path) -> None:
+    database_path = tmp_path / "passagen.db"
+    initialize_database(database_path)
+    with connect_database(database_path) as connection:
+        insert_paper(connection, "paper-1", "a" * 64)
+        connection.execute(
+            """
+            INSERT INTO paper_citations (
+                paper_id, format, content, citation_key, source, authoritative,
+                metadata_fingerprint, generator_version, remote_status
+            ) VALUES (?, 'bibtex', ?, ?, 'local_metadata', 0, ?, 'bibtex-v2', 'not_attempted')
+            """,
+            ("paper-1", "@misc{paper-1,}\n", "paper-1", "fingerprint"),
+        )
+        connection.execute("DELETE FROM papers WHERE id = ?", ("paper-1",))
+        citation = connection.execute(
+            "SELECT paper_id FROM paper_citations WHERE paper_id = ?", ("paper-1",)
+        ).fetchone()
+
+    assert citation is None
 
 
 def test_rejects_newer_database_schema(tmp_path: Path) -> None:
